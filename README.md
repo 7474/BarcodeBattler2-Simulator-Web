@@ -88,7 +88,13 @@ GitHubリポジトリの **Settings → Secrets and variables → Actions** に
 
 - カメラまたは手入力でJAN/EANの8桁・13桁を読み取ります。チェックデジットを検証します。
 - カメラはHTTPS（開発時はlocalhost）と利用者の許可が必要です。
+  ネイティブのBarcodeDetectorがないブラウザ（iOS Safari、Firefoxなど）ではWebAssembly版のZXingで読むため、
+  WorkerのCSPで`'wasm-unsafe-eval'`を許可しています。
   映像は端末内で解析し、送信しません。カメラを使えない端末では手入力できます。
+- 画面は実機の配置に合わせています（画像は自作のCSS/SVGで、原作の画像は使っていません）。
+  CARD INで1P/2Pを読み込み、SET（またはL-BATTLE/R-BATTLE）でバトル開始。
+  自分の番にBATTLEで攻撃、POWERで回復します。SELECTでC0/C1/C2を切り替え、ON/OFFでリセットします。
+  薬草・魔法・強打は本体下の操作パネルから使います。
 - ローカル対戦は1P/2Pを読み込んでバトル開始。
 - 「1P/2P 合体・アイテム」を選ぶと2枚目を読み込めます。
   対戦部屋ではサーバーが元の1枚から能力を再計算します。
