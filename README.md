@@ -53,14 +53,14 @@ CloudflareアカウントでD1/R2を有効にする必要があります。
 
 ### Amazonアソシエイト商品検索（任意）
 
-日本のAmazon Product Advertising APIを使うには、日本のアソシエイト・アカウントと
-PA-APIのアクセスキー・シークレットキーが必要です。次の3つをWorker Secretとして登録すると、
+日本のAmazon Creators APIを使うには、日本のアソシエイト・アカウントとAPIクライアント認証情報が必要です。
+次の3つをWorker Secretとして登録すると、
 バーコード検索時にAmazonを優先し、商品番号が一致した結果だけを採用します。
 一致しない場合やAPIが利用できない場合はOpen Food Factsにフォールバックします。
 
 ```sh
-npx wrangler secret put AMAZON_ACCESS_KEY
-npx wrangler secret put AMAZON_SECRET_KEY
+npx wrangler secret put AMAZON_CLIENT_ID
+npx wrangler secret put AMAZON_CLIENT_SECRET
 npx wrangler secret put AMAZON_ASSOCIATE_TAG
 ```
 
@@ -69,7 +69,7 @@ npx wrangler secret put AMAZON_ASSOCIATE_TAG
 有効時は商品ページにアフィリエイトリンクと通常リンクを分けて表示し、
 フッターに「Amazonのアソシエイトとして、BarcodeBattler2-Simulator-Webは
 適格販売により収入を得ています。」と表示します。
-PA-APIの利用条件・表示要件に従ってください。
+Creators APIの利用条件・表示要件に従ってください。
 
 ## 遊び方・対戦部屋
 

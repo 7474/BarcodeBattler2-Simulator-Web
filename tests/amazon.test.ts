@@ -1,48 +1,77 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { amazonAffiliateEnabled, amazonProductFromResponse, createAmazonSearchRequest } from '../worker/amazon.ts'
+import { AMAZON_SEARCH_ENDPOINT, amazonAffiliateEnabled, amazonProductFromResponse, createAmazonSearchRequest, searchAmazonProduct } from '../worker/amazon.ts'
 
 const env = {
-  AMAZON_ACCESS_KEY: 'access-key',
-  AMAZON_SECRET_KEY: 'secret-key',
+  AMAZON_CLIENT_ID: 'client-id',
+  AMAZON_CLIENT_SECRET: 'client-secret',
   AMAZON_ASSOCIATE_TAG: 'example-22',
 }
 
-test('Amazon affiliate lookup requires a tag and both PA-API credentials', () => {
+test('Amazon affiliate lookup requires a tag and both Creators API credentials', () => {
   assert.equal(amazonAffiliateEnabled(env), true)
   assert.equal(amazonAffiliateEnabled({ ...env, AMAZON_ASSOCIATE_TAG: 'invalid tag' }), false)
-  assert.equal(amazonAffiliateEnabled({ ...env, AMAZON_SECRET_KEY: undefined }), false)
+  assert.equal(amazonAffiliateEnabled({ ...env, AMAZON_CLIENT_SECRET: undefined }), false)
 })
 
-test('Amazon SearchItems request targets Japan and signs the barcode query', async () => {
-  const { url, init } = await createAmazonSearchRequest(env, '4901234567894', new Date('2026-10-23T19:31:05.000Z'))
+test('Creators API search request targets Japan with bearer auth and barcode query', () => {
+  const init = createAmazonSearchRequest('test-token', '4901234567894', env.AMAZON_ASSOCIATE_TAG)
   const headers = new Headers(init.headers)
   const payload = JSON.parse(String(init.body))
-  assert.equal(url, 'https://webservices.amazon.co.jp/paapi5/searchitems')
-  assert.equal(payload.Marketplace, 'www.amazon.co.jp')
-  assert.equal(payload.PartnerTag, env.AMAZON_ASSOCIATE_TAG)
-  assert.equal(payload.Keywords, '4901234567894')
-  assert.ok(payload.Resources.includes('ItemInfo.ExternalIds'))
-  assert.equal(headers.get('x-amz-date'), '20261023T193105Z')
-  assert.match(headers.get('authorization')!, /^AWS4-HMAC-SHA256 Credential=access-key\/20261023\/us-west-2\/ProductAdvertisingAPI\/aws4_request,/)
-  assert.ok(!headers.get('authorization')!.includes(env.AMAZON_SECRET_KEY))
+  assert.equal(AMAZON_SEARCH_ENDPOINT, 'https://creatorsapi.amazon/catalog/v1/searchItems')
+  assert.equal(init.method, 'POST')
+  assert.equal(payload.marketplace, 'www.amazon.co.jp')
+  assert.equal(payload.partnerTag, env.AMAZON_ASSOCIATE_TAG)
+  assert.equal(payload.keywords, '4901234567894')
+  assert.ok(payload.resources.includes('itemInfo.externalIds'))
+  assert.equal(headers.get('authorization'), ['Bearer', 'test-token'].join(' '))
+  assert.equal(headers.get('x-marketplace'), 'www.amazon.co.jp')
+})
+
+test('Creators API lookup obtains and reuses an OAuth token', async () => {
+  const originalFetch = globalThis.fetch
+  const requests: { url: string; init: RequestInit }[] = []
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input)
+    requests.push({ url, init })
+    if (url.endsWith('/auth/o2/token')) {
+      const form = new URLSearchParams(String(init.body))
+      assert.equal(form.get('grant_type'), 'client_credentials')
+      assert.equal(form.get('client_id'), env.AMAZON_CLIENT_ID)
+      assert.equal(form.get('scope'), 'creatorsapi::default')
+      return Response.json({ access_token: 'lookup-test-token', expires_in: 3600 })
+    }
+    return Response.json({ itemsResult: { items: [] } })
+  }
+  try {
+    assert.equal(await searchAmazonProduct(env, '4901234567894'), null)
+    assert.equal(await searchAmazonProduct(env, '4901234567894'), null)
+    assert.equal(requests.length, 3)
+    assert.ok(requests[0]!.url.endsWith('/auth/o2/token'))
+    assert.equal(requests[1]!.url, AMAZON_SEARCH_ENDPOINT)
+    assert.equal(new Headers(requests[1]!.init.headers).get('authorization'),
+      ['Bearer', 'lookup-test-token'].join(' '))
+    assert.equal(requests[2]!.url, AMAZON_SEARCH_ENDPOINT)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 test('Amazon product selection requires an exact EAN or UPC and validates its thumbnail URL', () => {
   const response = {
-    SearchResult: {
-      Items: [
+    itemsResult: {
+      items: [
         {
-          ASIN: 'B000000001',
-          ItemInfo: { Title: { DisplayValue: 'Not this product' }, ExternalIds: { EANs: { DisplayValues: ['4900000000000'] } } },
+          asin: 'B000000001',
+          itemInfo: { title: { displayValue: 'Not this product' }, externalIds: { eans: { displayValues: ['4900000000000'] } } },
         },
         {
-          ASIN: 'B000000002',
-          ItemInfo: {
-            Title: { DisplayValue: '商品\u0000名' },
-            ExternalIds: { EANs: { DisplayValues: ['4901234567894'] } },
+          asin: 'B000000002',
+          itemInfo: {
+            title: { displayValue: '商品\u0000名' },
+            externalIds: { eans: { displayValues: ['4901234567894'] } },
           },
-          Images: { Primary: { Small: { URL: 'https://m.media-amazon.com/images/I/example.jpg' } } },
+          images: { primary: { small: { url: 'https://m.media-amazon.com/images/I/example.jpg' } } },
         },
       ],
     },
@@ -54,11 +83,11 @@ test('Amazon product selection requires an exact EAN or UPC and validates its th
   })
   assert.equal(amazonProductFromResponse(response, '4901234567895'), null)
   assert.equal(amazonProductFromResponse({
-    SearchResult: {
-      Items: [{
-        ASIN: 'B000000002',
-        ItemInfo: { ExternalIds: { EANs: { DisplayValues: ['4901234567894'] } } },
-        Images: { Primary: { Small: { URL: 'https://attacker.example/image.jpg' } } },
+    itemsResult: {
+      items: [{
+        asin: 'B000000002',
+        itemInfo: { externalIds: { eans: { displayValues: ['4901234567894'] } } },
+        images: { primary: { small: { url: 'https://attacker.example/image.jpg' } } },
       }],
     },
   }, '4901234567894')?.thumbnail, null)

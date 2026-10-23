@@ -1,10 +1,6 @@
-const encoder = new TextEncoder()
-const endpoint = 'https://webservices.amazon.co.jp/paapi5/searchitems'
-const host = 'webservices.amazon.co.jp'
-const region = 'us-west-2'
-const service = 'ProductAdvertisingAPI'
-const target = 'com.amazon.paapi5.v1.ProductAdvertisingAPIv1.SearchItems'
-const signedHeaders = 'content-encoding;content-type;host;x-amz-date;x-amz-target'
+export const AMAZON_SEARCH_ENDPOINT = 'https://creatorsapi.amazon/catalog/v1/searchItems'
+const tokenEndpoint = 'https://api.amazon.co.jp/auth/o2/token'
+const marketplace = 'www.amazon.co.jp'
 const imageHosts = new Set([
   'm.media-amazon.com',
   'images-fe.ssl-images-amazon.com',
@@ -13,8 +9,8 @@ const imageHosts = new Set([
 ])
 
 export interface AmazonEnv {
-  AMAZON_ACCESS_KEY?: string
-  AMAZON_SECRET_KEY?: string
+  AMAZON_CLIENT_ID?: string
+  AMAZON_CLIENT_SECRET?: string
   AMAZON_ASSOCIATE_TAG?: string
 }
 
@@ -24,83 +20,76 @@ export interface AmazonProduct {
   thumbnail: string | null
 }
 
-function hex(bytes: ArrayBuffer | Uint8Array): string {
-  return Array.from(new Uint8Array(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)),
-    byte => byte.toString(16).padStart(2, '0')).join('')
-}
+let cachedToken: { clientId: string; value: string; expiresAt: number } | null = null
 
-async function sha256(value: string): Promise<string> {
-  return hex(await crypto.subtle.digest('SHA-256', encoder.encode(value)))
-}
-
-async function hmac(key: Uint8Array, value: string): Promise<Uint8Array> {
-  const imported = await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
-  return new Uint8Array(await crypto.subtle.sign('HMAC', imported, encoder.encode(value)))
+async function readJson(response: Response, max: number): Promise<unknown> {
+  if (!response.headers.get('Content-Type')?.toLowerCase().includes('application/json')) {
+    await response.body?.cancel()
+    throw new Error('Unexpected Amazon response type.')
+  }
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error('Amazon response was empty.')
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > max) {
+        await reader.cancel()
+        throw new Error('Amazon response was too large.')
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const bytes = new Uint8Array(size)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.length
+  }
+  return JSON.parse(new TextDecoder().decode(bytes))
 }
 
 export function amazonAffiliateEnabled(env: AmazonEnv): boolean {
-  return !!env.AMAZON_ACCESS_KEY && !!env.AMAZON_SECRET_KEY &&
+  return !!env.AMAZON_CLIENT_ID && !!env.AMAZON_CLIENT_SECRET &&
     !!env.AMAZON_ASSOCIATE_TAG && /^[A-Za-z0-9_-]{1,64}$/.test(env.AMAZON_ASSOCIATE_TAG)
 }
 
-export async function createAmazonSearchRequest(
-  env: AmazonEnv,
-  barcode: string,
-  date = new Date(),
-): Promise<{ url: string; init: RequestInit }> {
-  if (!amazonAffiliateEnabled(env)) throw new Error('Amazon Product Advertising API is not configured.')
-
-  const amzDate = date.toISOString().replace(/[:-]|\.\d{3}/g, '')
-  const dateStamp = amzDate.slice(0, 8)
-  const payload = JSON.stringify({
-    PartnerTag: env.AMAZON_ASSOCIATE_TAG,
-    PartnerType: 'Associates',
-    Marketplace: 'www.amazon.co.jp',
-    Keywords: barcode,
-    SearchIndex: 'All',
-    ItemCount: 10,
-    Resources: ['Images.Primary.Small', 'ItemInfo.Title', 'ItemInfo.ExternalIds'],
-  })
-  const canonicalHeaders = [
-    'content-encoding:amz-1.0',
-    'content-type:application/json; charset=utf-8',
-    `host:${host}`,
-    `x-amz-date:${amzDate}`,
-    `x-amz-target:${target}`,
-    '',
-  ].join('\n')
-  const canonicalRequest = [
-    'POST',
-    '/paapi5/searchitems',
-    '',
-    canonicalHeaders,
-    signedHeaders,
-    await sha256(payload),
-  ].join('\n')
-  const scope = `${dateStamp}/${region}/${service}/aws4_request`
-  const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${await sha256(canonicalRequest)}`
-  const dateKey = await hmac(encoder.encode(`AWS4${env.AMAZON_SECRET_KEY}`), dateStamp)
-  const regionKey = await hmac(dateKey, region)
-  const serviceKey = await hmac(regionKey, service)
-  const signingKey = await hmac(serviceKey, 'aws4_request')
-  const signature = hex(await hmac(signingKey, stringToSign))
-  const authorization = `AWS4-HMAC-SHA256 Credential=${env.AMAZON_ACCESS_KEY}/${scope}, ` +
-    `SignedHeaders=${signedHeaders}, Signature=${signature}`
-
+export function createAmazonSearchRequest(accessToken: string, barcode: string, partnerTag: string): RequestInit {
   return {
-    url: endpoint,
-    init: {
-      method: 'POST',
-      headers: {
-        'Content-Encoding': 'amz-1.0',
-        'Content-Type': 'application/json; charset=utf-8',
-        'X-Amz-Date': amzDate,
-        'X-Amz-Target': target,
-        Authorization: authorization,
-      },
-      body: payload,
+    method: 'POST',
+    headers: {
+      Authorization: ['Bearer', accessToken].join(' '),
+      'Content-Type': 'application/json',
+      'x-marketplace': marketplace,
     },
+    body: JSON.stringify({
+      keywords: barcode,
+      marketplace,
+      partnerTag,
+      resources: ['images.primary.small', 'itemInfo.title', 'itemInfo.externalIds'],
+    }),
   }
+}
+
+function object(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function nested(source: unknown, ...keys: string[]): unknown {
+  let value = source
+  for (const key of keys) value = object(value)[key]
+  return value
+}
+
+function displayValues(value: unknown): unknown[] {
+  const record = object(value)
+  const values = record.displayValues ?? record.DisplayValues
+  return Array.isArray(values) ? values : []
 }
 
 function imageUrl(value: unknown): string | null {
@@ -115,69 +104,85 @@ function imageUrl(value: unknown): string | null {
 }
 
 export function amazonProductFromResponse(value: unknown, barcode: string): AmazonProduct | null {
-  if (!value || typeof value !== 'object') return null
-  const items = (value as { SearchResult?: { Items?: unknown } }).SearchResult?.Items
+  const root = object(value)
+  const result = object(root.itemsResult ?? root.searchResult ?? root.SearchResult)
+  const items = result.items ?? result.Items ?? root.items
   if (!Array.isArray(items)) return null
   for (const entry of items) {
-    if (!entry || typeof entry !== 'object') continue
-    const item = entry as {
-      ASIN?: unknown
-      ItemInfo?: {
-        Title?: { DisplayValue?: unknown }
-        ExternalIds?: { EANs?: { DisplayValues?: unknown }; UPCs?: { DisplayValues?: unknown } }
-      }
-      Images?: { Primary?: { Small?: { URL?: unknown } } }
-    }
-    const identifiers = [
-      item.ItemInfo?.ExternalIds?.EANs?.DisplayValues,
-      item.ItemInfo?.ExternalIds?.UPCs?.DisplayValues,
-    ].flatMap(values => Array.isArray(values) ? values : [])
-    if (!identifiers.includes(barcode) || typeof item.ASIN !== 'string' || !/^[A-Z0-9]{10}$/.test(item.ASIN)) continue
-    const title = item.ItemInfo?.Title?.DisplayValue
+    const item = object(entry)
+    const info = item.itemInfo ?? item.ItemInfo
+    const externalIds = object(nested(info, 'externalIds') ?? nested(info, 'ExternalIds'))
+    const eans = externalIds.eans ?? externalIds.EANs
+    const upcs = externalIds.upcs ?? externalIds.UPCs
+    const identifiers = [...displayValues(eans), ...displayValues(upcs)]
+    const asin = item.asin ?? item.ASIN
+    if (!identifiers.includes(barcode) || typeof asin !== 'string' || !/^[A-Z0-9]{10}$/.test(asin)) continue
+
+    const title = nested(info, 'title') ?? nested(info, 'Title')
+    const image = nested(item.images ?? item.Images, 'primary', 'small') ??
+      nested(item.images ?? item.Images, 'Primary', 'Small')
+    const titleValue = object(title).displayValue ?? object(title).DisplayValue
+    const imageValue = object(image).url ?? object(image).URL
     return {
-      asin: item.ASIN,
-      name: typeof title === 'string' ? title.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 160) || null : null,
-      thumbnail: imageUrl(item.Images?.Primary?.Small?.URL),
+      asin,
+      name: typeof titleValue === 'string'
+        ? titleValue.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 160) || null
+        : null,
+      thumbnail: imageUrl(imageValue),
     }
   }
   return null
 }
 
-export async function searchAmazonProduct(env: AmazonEnv, barcode: string): Promise<AmazonProduct | null> {
-  const { url, init } = await createAmazonSearchRequest(env, barcode)
+async function accessToken(env: AmazonEnv): Promise<string> {
+  if (!amazonAffiliateEnabled(env)) throw new Error('Amazon Creators API is not configured.')
+  const currentToken = cachedToken
+  if (currentToken && currentToken.clientId === env.AMAZON_CLIENT_ID && currentToken.expiresAt > Date.now()) {
+    return currentToken.value
+  }
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 3500)
   try {
-    const response = await fetch(url, { ...init, redirect: 'error', signal: controller.signal })
-    if (!response.ok || !response.headers.get('Content-Type')?.toLowerCase().includes('application/json')) {
-      await response.body?.cancel()
-      return null
+    const response = await fetch(tokenEndpoint, {
+      method: 'POST',
+      redirect: 'error',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: env.AMAZON_CLIENT_ID!,
+        client_secret: env.AMAZON_CLIENT_SECRET!,
+        scope: 'creatorsapi::default',
+      }),
+    })
+    const data = object(await readJson(response, 16 * 1024))
+    if (!response.ok || typeof data.access_token !== 'string' || !Number.isFinite(data.expires_in)) {
+      throw new Error('Amazon authentication failed.')
     }
-    const chunks: Uint8Array[] = []
-    let size = 0
-    const reader = response.body?.getReader()
-    if (!reader) return null
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        size += value.byteLength
-        if (size > 128 * 1024) {
-          await reader.cancel()
-          return null
-        }
-        chunks.push(value)
-      }
-    } finally {
-      reader.releaseLock()
+    cachedToken = {
+      clientId: env.AMAZON_CLIENT_ID!,
+      value: data.access_token,
+      expiresAt: Date.now() + Math.max(0, Number(data.expires_in) - 60) * 1000,
     }
-    const bytes = new Uint8Array(size)
-    let offset = 0
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset)
-      offset += chunk.length
-    }
-    return amazonProductFromResponse(JSON.parse(new TextDecoder().decode(bytes)), barcode)
+    return data.access_token
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export async function searchAmazonProduct(env: AmazonEnv, barcode: string): Promise<AmazonProduct | null> {
+  const token = await accessToken(env)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 3500)
+  try {
+    const response = await fetch(AMAZON_SEARCH_ENDPOINT, {
+      ...createAmazonSearchRequest(token, barcode, env.AMAZON_ASSOCIATE_TAG!),
+      redirect: 'error',
+      signal: controller.signal,
+    })
+    const data = await readJson(response, 128 * 1024)
+    if (!response.ok) return null
+    return amazonProductFromResponse(data, barcode)
   } finally {
     clearTimeout(timer)
   }
