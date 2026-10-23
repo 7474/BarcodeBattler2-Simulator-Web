@@ -1,6 +1,7 @@
 import { battle as simulateBattle, decodeBarcode, validateBarcode } from '../src/game.ts'
+import { amazonAffiliateEnabled, searchAmazonProduct, type AmazonEnv } from './amazon.ts'
 
-interface Env {
+interface Env extends AmazonEnv {
   DB: D1Database
   IMAGES: R2Bucket
   ASSETS: Fetcher
@@ -20,6 +21,9 @@ interface Room {
   updated_at: number
   champion_product_name?: string | null
   champion_has_thumbnail?: number | null
+  champion_product_source?: string | null
+  champion_product_asin?: string | null
+  champion_thumbnail_url?: string | null
 }
 
 interface ProductRow {
@@ -27,6 +31,9 @@ interface ProductRow {
   name: string | null
   has_thumbnail: number
   checked_at: number
+  source: string
+  asin: string | null
+  thumbnail_url: string | null
 }
 
 class HttpError extends Error {
@@ -39,7 +46,8 @@ const COOKIE = 'bb_session'
 const SESSION_SECONDS = 365 * 24 * 60 * 60
 const encoder = new TextEncoder()
 const ROOM_SELECT = 'SELECT rooms.*, products.name AS champion_product_name, ' +
-  'products.has_thumbnail AS champion_has_thumbnail FROM rooms ' +
+  'products.has_thumbnail AS champion_has_thumbnail, products.source AS champion_product_source, ' +
+  'products.asin AS champion_product_asin, products.thumbnail_url AS champion_thumbnail_url FROM rooms ' +
   'LEFT JOIN products ON products.barcode = rooms.champion_barcode'
 
 function headers(api = true): Headers {
@@ -48,7 +56,7 @@ function headers(api = true): Headers {
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'same-origin',
     'Permissions-Policy': 'camera=(self), microphone=(), geolocation=()',
-    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://m.media-amazon.com https://images-fe.ssl-images-amazon.com https://images-jp.ssl-images-amazon.com https://images-na.ssl-images-amazon.com; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
   })
   if (api) {
     result.set('Cache-Control', 'no-store')
@@ -184,7 +192,7 @@ function barcode(value: unknown): string {
   return value
 }
 
-function publicRoom(room: Room, owner: string | null) {
+function publicRoom(room: Room, owner: string | null, env: Env) {
   return {
     id: room.id,
     name: room.name,
@@ -202,7 +210,10 @@ function publicRoom(room: Room, owner: string | null) {
         name: room.champion_product_name ?? null,
         has_thumbnail: room.champion_has_thumbnail ?? 0,
         checked_at: 0,
-      }),
+        source: room.champion_product_source ?? 'openfoodfacts',
+        asin: room.champion_product_asin ?? null,
+        thumbnail_url: room.champion_thumbnail_url ?? null,
+      }, env),
     } : null,
     updatedAt: room.updated_at,
   }
@@ -214,11 +225,21 @@ async function getRoom(env: Env, id: string): Promise<Room> {
   return room
 }
 
-function productValue(row: ProductRow | null) {
-  return row && (row.name || row.has_thumbnail) ? {
+function productValue(row: ProductRow | null, env: Env) {
+  if (!row) return null
+  const amazon = row.source === 'amazon' && amazonAffiliateEnabled(env) && row.asin
+  const thumbnail = row.source === 'amazon' ? row.thumbnail_url :
+    row.has_thumbnail ? `/api/images/${row.barcode}` : null
+  if (!row.name && !thumbnail && !amazon) return null
+  return {
     name: row.name,
-    thumbnail: row.has_thumbnail ? `/api/images/${row.barcode}` : null,
-  } : null
+    thumbnail,
+    amazonAsin: amazon ? row.asin : null,
+    amazonAffiliateUrl: amazon
+      ? `https://www.amazon.co.jp/dp/${row.asin}?tag=${encodeURIComponent(env.AMAZON_ASSOCIATE_TAG!)}`
+      : null,
+    amazonStandardUrl: amazon ? `https://www.amazon.co.jp/dp/${row.asin}` : null,
+  }
 }
 
 async function fetchBytes(url: string, max: number): Promise<{ bytes: Uint8Array; type: string }> {
@@ -250,9 +271,42 @@ function imageType(bytes: Uint8Array): string | null {
 
 async function lookupProduct(env: Env, code: string) {
   const cached = await env.DB.prepare('SELECT * FROM products WHERE barcode = ?').bind(code).first<ProductRow>()
-  if (cached && now() - cached.checked_at < (cached.name ? 7 * 86400 : 3600)) return productValue(cached)
-  let name = cached?.name ?? null
-  let hasThumbnail = cached?.has_thumbnail ?? 0
+  const timestamp = now()
+  const amazonEnabled = amazonAffiliateEnabled(env)
+  const openFoodFactsCache = cached?.source === 'amazon' ? null : cached
+  if (cached && (cached.source !== 'amazon' || amazonEnabled) &&
+    timestamp - cached.checked_at < (cached.source === 'amazon' ? 86400 : cached.name ? 7 * 86400 : 3600)) {
+    if (!amazonEnabled || cached.source === 'amazon') return productValue(cached, env)
+  }
+  if (amazonEnabled) {
+    try {
+      const amazon = await searchAmazonProduct(env, code)
+      if (amazon) {
+        const product: ProductRow = {
+          barcode: code,
+          name: amazon.name,
+          has_thumbnail: amazon.thumbnail ? 1 : 0,
+          checked_at: now(),
+          source: 'amazon',
+          asin: amazon.asin,
+          thumbnail_url: amazon.thumbnail,
+        }
+        await env.DB.prepare(
+          'INSERT INTO products (barcode, name, has_thumbnail, checked_at, source, asin, thumbnail_url) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
+          'ON CONFLICT(barcode) DO UPDATE SET name = excluded.name, has_thumbnail = excluded.has_thumbnail, ' +
+          'checked_at = excluded.checked_at, source = excluded.source, asin = excluded.asin, thumbnail_url = excluded.thumbnail_url',
+        ).bind(code, product.name, product.has_thumbnail, product.checked_at, product.source, product.asin, product.thumbnail_url).run()
+        return productValue(product, env)
+      }
+    } catch {
+      // Amazon failures fall through to the existing product source.
+    }
+  }
+  if (openFoodFactsCache && timestamp - openFoodFactsCache.checked_at <
+    (openFoodFactsCache.name ? 7 * 86400 : 3600)) return productValue(openFoodFactsCache, env)
+
+  let name = openFoodFactsCache?.name ?? null
+  let hasThumbnail = openFoodFactsCache?.has_thumbnail ?? 0
   try {
     const { bytes, type } = await fetchBytes(
       `https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=product_name,product_name_en,image_small_url`, 128 * 1024,
@@ -286,10 +340,14 @@ async function lookupProduct(env: Env, code: string) {
     // Cache upstream failures briefly; product availability never decides a battle.
   }
   await env.DB.prepare(
-    'INSERT INTO products (barcode, name, has_thumbnail, checked_at) VALUES (?, ?, ?, ?) ' +
-    'ON CONFLICT(barcode) DO UPDATE SET name = excluded.name, has_thumbnail = excluded.has_thumbnail, checked_at = excluded.checked_at',
-  ).bind(code, name, hasThumbnail, now()).run()
-  return productValue({ barcode: code, name, has_thumbnail: hasThumbnail, checked_at: now() })
+    'INSERT INTO products (barcode, name, has_thumbnail, checked_at, source, asin, thumbnail_url) VALUES (?, ?, ?, ?, ?, NULL, NULL) ' +
+    'ON CONFLICT(barcode) DO UPDATE SET name = excluded.name, has_thumbnail = excluded.has_thumbnail, ' +
+    'checked_at = excluded.checked_at, source = excluded.source, asin = NULL, thumbnail_url = NULL',
+  ).bind(code, name, hasThumbnail, now(), 'openfoodfacts').run()
+  return productValue({
+    barcode: code, name, has_thumbnail: hasThumbnail, checked_at: now(),
+    source: 'openfoodfacts', asin: null, thumbnail_url: null,
+  }, env)
 }
 
 async function challenge(request: Request, env: Env, roomId: string): Promise<Response> {
@@ -344,8 +402,11 @@ async function challenge(request: Request, env: Env, roomId: string): Promise<Re
     champion_owner_hash: winnerOwner, champion_wins: wins, last_battle_id: id, updated_at: timestamp,
     champion_product_name: challengerWon ? product?.name ?? null : room.champion_product_name,
     champion_has_thumbnail: challengerWon ? (product?.thumbnail ? 1 : 0) : room.champion_has_thumbnail,
+    champion_product_source: challengerWon ? (product?.amazonAsin ? 'amazon' : 'openfoodfacts') : room.champion_product_source,
+    champion_product_asin: challengerWon ? product?.amazonAsin ?? null : room.champion_product_asin,
+    champion_thumbnail_url: challengerWon && product?.amazonAffiliateUrl ? product.thumbnail : null,
   }
-  const publicResult = publicRoom(updated, owner)
+  const publicResult = publicRoom(updated, owner, env)
   const message = !room.champion_barcode ? 'You are the first champion of this room.'
     : challengerWon ? 'Victory! Your fighter is the new champion.' : 'The champion defended the room. Try another fighter.'
   return json({ message, battle: { ...battle, id, roomId, challengerBarcode: code, defenderBarcode: room.champion_barcode, winnerBarcode, createdAt: timestamp },
@@ -362,15 +423,18 @@ async function api(request: Request, env: Env): Promise<Response> {
     if (request.method === 'POST') await readBounded(request.body, 2048)
     return initializeSession(request, env)
   }
+  if (request.method === 'GET' && path === '/api/config') {
+    return json({ amazonAffiliateEnabled: amazonAffiliateEnabled(env) })
+  }
   if (request.method === 'GET' && path === '/api/rooms') {
     const owner = await session(request, env)
     const rows = await env.DB.prepare(`${ROOM_SELECT} WHERE rooms.enabled = 1 ORDER BY rooms.id`).all<Room>()
-    return json({ rooms: rows.results.map(room => publicRoom(room, owner)) })
+    return json({ rooms: rows.results.map(room => publicRoom(room, owner, env)) })
   }
   const roomMatch = /^\/api\/rooms\/([a-z0-9_-]+)$/.exec(path)
   if (request.method === 'GET' && roomMatch) {
     const owner = await session(request, env)
-    const room = publicRoom(await getRoom(env, roomMatch[1]!), owner)
+    const room = publicRoom(await getRoom(env, roomMatch[1]!), owner, env)
     const rows = await env.DB.prepare(
       'SELECT id, challenger_barcode, defender_barcode, winner_barcode, result, created_at FROM battles WHERE room_id = ? ORDER BY room_revision DESC LIMIT 20',
     ).bind(roomMatch[1]).all<{ id: string; challenger_barcode: string; defender_barcode: string | null; winner_barcode: string; result: string; created_at: number }>()
@@ -393,7 +457,10 @@ async function api(request: Request, env: Env): Promise<Response> {
     }
     await rateLimit(env, owner, 'product', 30)
     await rateLimitProductIp(request, env, owner)
-    return json({ product: await lookupProduct(env, code) }, 200, extra)
+    return json({
+      product: await lookupProduct(env, code),
+      amazonAffiliateEnabled: amazonAffiliateEnabled(env),
+    }, 200, extra)
   }
   const imageMatch = /^\/api\/images\/(\d+)$/.exec(path)
   if (request.method === 'GET' && imageMatch) {

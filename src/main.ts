@@ -3,7 +3,12 @@ import type { IScannerControls } from '@zxing/browser'
 import { createBattle, combineFighters, decodeBarcode, MAGIC_COSTS, type BattleAction, type BattleSession, type Fighter } from './game.ts'
 import { campaignEnemy, createCampaign, finishCampaignBattle, selectCampaignWorld, setCampaignEnemy, switchCampaignHero, type Campaign } from './campaign.ts'
 
-type Product = { name: string; thumbnail: string | null }
+type Product = {
+  name: string | null
+  thumbnail: string | null
+  amazonAffiliateUrl?: string | null
+  amazonStandardUrl?: string | null
+}
 type Room = { id: string; name: string; barcodePrefix: string | null; champion: { barcode: string; wins: number; isOwner?: boolean; product?: Product | null } | null }
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
@@ -40,7 +45,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <details><summary>バトルログ</summary><ol id="log"></ol></details>
     </section>
     <section class="help"><h2>遊び方</h2><p>1Pと2Pのバーコードを読み込んで対戦、または1Pの戦士で対戦部屋に挑戦してください。ローカルでは「合体・アイテム」を選び、2枚目を読み込めます。対戦部屋では元の1枚のみを使います。カメラを使えない場合は数字を入力できます。</p><p>「国内49コード」部屋は49で始まるコード専用。「無差別」部屋はすべての有効なJAN/EANコードが対象です。商品名・画像は見つかった場合のみ表示されます。</p><p>カメラにはHTTPSまたはlocalhostとアクセス許可が必要です。映像をサーバーへ送信することはありません。</p><p>逃走・戦闘後アイテムなど一部の実機操作は未対応です。</p></section>
-  </main><footer>非公式ファンプロジェクト · 原作ゲーム・商標の権利は各権利者に帰属します<br>商品データ: <a href="https://world.openfoodfacts.org/" target="_blank" rel="noreferrer">Open Food Facts</a>（ODbL / 画像 CC BY-SA）</footer>`
+  </main><footer>非公式ファンプロジェクト · 原作ゲーム・商標の権利は各権利者に帰属します<p id="amazon-disclosure" hidden>Amazonのアソシエイトとして、BarcodeBattler2-Simulator-Webは適格販売により収入を得ています。</p>商品データ: <a href="https://world.openfoodfacts.org/" target="_blank" rel="noreferrer">Open Food Facts</a>（ODbL / 画像 CC BY-SA）</footer>`
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const slots: { left: Fighter | null; right: Fighter | null } = { left: null, right: null }
@@ -82,6 +87,41 @@ function ensureSession() {
   return session
 }
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : '処理に失敗しました' }
+function validProductThumbnail(value: string | null | undefined) {
+  if (value?.startsWith('/api/images/')) return true
+  try {
+    const url = new URL(value || '')
+    return url.protocol === 'https:' && [
+      'm.media-amazon.com',
+      'images-fe.ssl-images-amazon.com',
+      'images-jp.ssl-images-amazon.com',
+      'images-na.ssl-images-amazon.com',
+    ].includes(url.hostname)
+  } catch {
+    return false
+  }
+}
+function appendAmazonLinks(parent: HTMLElement, product: Product | null | undefined) {
+  if (!product?.amazonAffiliateUrl || !product.amazonStandardUrl) return
+  const links = document.createElement('div')
+  links.className = 'product-links'
+  for (const [href, label, affiliate] of [
+    [product.amazonAffiliateUrl, 'Amazonで購入（アフィリエイト）', true],
+    [product.amazonStandardUrl, 'Amazon商品ページ（アフィリエイトなし）', false],
+  ] as const) {
+    try {
+      const url = new URL(href)
+      if (url.protocol !== 'https:' || url.hostname !== 'www.amazon.co.jp' || !/^\/dp\/[A-Z0-9]{10}$/.test(url.pathname)) continue
+      const link = document.createElement('a')
+      link.href = url.href
+      link.textContent = label
+      link.target = '_blank'
+      link.rel = affiliate ? 'sponsored noreferrer' : 'noreferrer'
+      links.append(link)
+    } catch { /* Ignore malformed product links. */ }
+  }
+  if (links.childElementCount) parent.append(links)
+}
 function clearDuel() {
   if (duelOriginal) { slots.left = duelOriginal.left; slots.right = duelOriginal.right }
   duel = null
@@ -97,10 +137,10 @@ function render() {
     card.append(heading)
     if (fighter) {
       const product = products.get(fighter.barcode)
-      if (product?.thumbnail?.startsWith('/api/images/')) {
+      if (product?.thumbnail && validProductThumbnail(product.thumbnail)) {
         const image = document.createElement('img')
         image.src = product.thumbnail
-        image.alt = product.name
+        image.alt = product.name || fighter.barcode
         image.className = 'product-image'
         card.append(image)
       }
@@ -109,7 +149,9 @@ function render() {
       const stats = document.createElement('p')
       stats.className = 'stats'
       stats.textContent = `HP ${fighter.hp} / 攻 ${fighter.attack} / 守 ${fighter.defense} / MP ${fighter.mp} / 薬草 ${fighter.pp}`
-      card.append(label, stats)
+      card.append(label)
+      appendAmazonLinks(card, product)
+      card.append(stats)
     }
     return card
   }))
@@ -159,7 +201,8 @@ async function loadBarcode(barcode: string) {
     if (side === 'left' && !online) $<HTMLSelectElement>('slot').value = 'right'
     try {
       await ensureSession()
-      const result = await api<{ product: Product | null }>(`/api/products/${fighter.barcode}`)
+      const result = await api<{ product: Product | null; amazonAffiliateEnabled: boolean }>(`/api/products/${fighter.barcode}`)
+      $('amazon-disclosure').hidden = !result.amazonAffiliateEnabled
       if (result.product) products.set(fighter.barcode, result.product)
       render()
     } catch { /* Product lookup must not prevent local play. */ }
@@ -377,7 +420,7 @@ async function refreshRooms() {
       button.disabled = busy || !!room.champion?.isOwner
       button.addEventListener('click', () => void challenge(room.id))
       const product = room.champion?.product
-      if (product?.thumbnail?.startsWith('/api/images/')) {
+      if (product?.thumbnail && validProductThumbnail(product.thumbnail)) {
         const image = document.createElement('img')
         image.src = product.thumbnail
         image.alt = product.name || room.champion!.barcode
@@ -386,7 +429,9 @@ async function refreshRooms() {
       }
       const regulation = document.createElement('p')
       regulation.textContent = room.barcodePrefix ? `レギュレーション: ${room.barcodePrefix}で始まるコード` : 'レギュレーション: 無差別'
-      card.append(heading, regulation, description, button)
+      card.append(heading, regulation, description)
+      appendAmazonLinks(card, product)
+      card.append(button)
       return card
     }))
   } catch (error) { status(`対戦部屋: ${errorMessage(error)}（Cloudflare Workerを起動してください）`) }
@@ -396,6 +441,9 @@ async function challenge(id: string) {
   if (!slots.left) { status('先に1Pのバーコードを読み込んでください'); return }
   busy = true
   render()
+  void api<{ amazonAffiliateEnabled: boolean }>('/api/config')
+    .then(config => { $('amazon-disclosure').hidden = !config.amazonAffiliateEnabled })
+    .catch(() => {})
   $('rooms').querySelectorAll('button').forEach(button => { button.disabled = true })
   try {
     await ensureSession()

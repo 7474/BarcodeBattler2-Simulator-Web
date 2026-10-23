@@ -51,6 +51,26 @@ npm run deploy
 CloudflareアカウントでD1/R2を有効にする必要があります。
 認証情報や`.dev.vars`はコミットしないでください。
 
+### Amazonアソシエイト商品検索（任意）
+
+日本のAmazon Product Advertising APIを使うには、日本のアソシエイト・アカウントと
+PA-APIのアクセスキー・シークレットキーが必要です。次の3つをWorker Secretとして登録すると、
+バーコード検索時にAmazonを優先し、商品番号が一致した結果だけを採用します。
+一致しない場合やAPIが利用できない場合はOpen Food Factsにフォールバックします。
+
+```sh
+npx wrangler secret put AMAZON_ACCESS_KEY
+npx wrangler secret put AMAZON_SECRET_KEY
+npx wrangler secret put AMAZON_ASSOCIATE_TAG
+```
+
+`AMAZON_ASSOCIATE_TAG`には日本のアソシエイトID（例: `example-22`）を設定します。
+3つの値が揃っている場合だけAmazon検索とアフィリエイト表示が有効です。
+有効時は商品ページにアフィリエイトリンクと通常リンクを分けて表示し、
+フッターに「Amazonのアソシエイトとして、BarcodeBattler2-Simulator-Webは
+適格販売により収入を得ています。」と表示します。
+PA-APIの利用条件・表示要件に従ってください。
+
 ## 遊び方・対戦部屋
 
 - カメラまたは手入力でJAN/EANの8桁・13桁を読み取ります。チェックデジットを検証します。
@@ -88,9 +108,12 @@ CloudflareアカウントでD1/R2を有効にする必要があります。
 
 ## 商品情報
 
-読み取った番号からOpen Food Factsで商品名を検索し、見つかった場合だけ表示します。
+アソシエイト設定がある場合はAmazonでバーコードを検索し、識別番号が一致した商品の
+名前とサムネイルを表示します。Amazonで解決できない場合はOpen Food Factsを検索します。
 食品以外や未登録商品はバーコード番号のまま表示します。検索障害で対戦は中断しません。
-画像は許可した配信元から取得し、サイズ・形式を制限してR2にキャッシュします。
+Open Food Facts画像は許可した配信元から取得し、サイズ・形式を制限してR2にキャッシュします。
+Amazonの商品画像はAmazonが返す画像URLを利用します。Amazon商品にはアフィリエイトリンクと
+アフィリエイトを含まない商品ページリンクを併記します。
 商品情報を表示する際は[Open Food Facts](https://world.openfoodfacts.org/)の
 [データ利用条件](https://world.openfoodfacts.org/terms-of-use)
 （データベースODbL、個別コンテンツDbCL、画像CC BY-SA）を確認してください。
