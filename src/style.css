@@ -1,0 +1,48 @@
+:root { font-family: system-ui, 'Noto Sans JP', sans-serif; color: #f8f3e7; background: #17191f; font-synthesis: none; line-height: 1.6; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+header { display: flex; justify-content: space-between; align-items: center; padding: 18px max(5vw, 16px); border-bottom: 1px solid #42434a; gap: 12px; }
+.brand { font-weight: 800; font-style: italic; letter-spacing: 2px; }
+.brand b { color: #ffce55; }
+.badge { font-size: .65rem; border: 1px solid #777; padding: 4px 8px; letter-spacing: 2px; }
+main { max-width: 980px; margin: auto; padding: 24px 18px; }
+h1 { font-size: clamp(1.5rem, 4vw, 2.4rem); margin-bottom: 4px; }
+.intro p, footer { color: #b4b3b6; font-size: .85rem; }
+nav { display: flex; gap: 10px; margin: 28px 0 18px; }
+button, input, select { font: inherit; border-radius: 7px; border: 1px solid #65656d; padding: 11px 15px; min-height: 46px; }
+button { cursor: pointer; background: #343740; color: #fff; font-weight: 600; }
+button:hover { background: #494d58; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button[aria-pressed=true], .primary { background: #f5c553; color: #211b13; border-color: #f5c553; }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid #6fc9ff; outline-offset: 3px; }
+.console { background: #ac2436; border: 3px solid #d44354; border-radius: 24px 24px 52px 24px; padding: clamp(18px, 4vw, 34px); box-shadow: 0 14px 0 #671825, 0 25px 40px #0005; }
+.console-label { font-style: italic; font-weight: 800; font-size: 1.15rem; margin-bottom: 16px; }
+.console-label span { float: right; font-size: .65rem; color: #ffe693; padding-top: 7px; }
+.lcd { background: #c1ce9a; color: #243723; border: 10px solid #282d30; border-radius: 10px; padding: 18px; min-height: 220px; box-shadow: inset 3px 3px 8px #0003; }
+#status { font-weight: 800; border-bottom: 1px solid #61734d; padding-bottom: 10px; overflow-wrap: anywhere; }
+.fighters { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.fighters article { min-width: 0; }
+.fighters h2 { font-size: 1rem; }
+.fighters p { overflow-wrap: anywhere; }
+.stats { font-family: monospace; font-size: 1rem; font-weight: bold; }
+.product-image { width: 60px; height: 60px; object-fit: contain; float: right; }
+.controls { margin-top: 24px; }
+label { display: block; font-size: .85rem; margin: 10px 0 5px; }
+.input-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }
+input { flex: 1; min-width: 160px; background: #fffaf1; color: #222; width: 100%; }
+select { background: #fffaf1; color: #222; }
+.primary { font-size: 1.2rem; flex: 1; }
+#video { width: 100%; max-height: 300px; background: #111; border-radius: 8px; }
+#camera-panel { margin-bottom: 18px; }
+#rooms { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin: 16px 0; }
+#rooms article { background: #771728; padding: 16px; border: 1px solid #e85d6c; border-radius: 10px; }
+#rooms h3 { margin: 0; }
+details { background: #791a2a; border-radius: 8px; padding: 12px; }
+summary { cursor: pointer; }
+#log { max-height: 280px; overflow-y: auto; padding-left: 30px; font-size: .85rem; }
+.help { margin: 45px 0 20px; color: #cbc9ce; font-size: .85rem; }
+.help h2 { font-size: 1.1rem; color: #f5c553; }
+footer { text-align: center; padding: 24px; }
+footer a { color: #f5c553; }
+[hidden] { display: none !important; }
+@media (max-width: 540px) { .badge { display: none; } .fighters { grid-template-columns: 1fr; gap: 0; } .fighters article + article { border-top: 1px solid #61734d; } #rooms { grid-template-columns: 1fr; } nav button { flex: 1; padding: 10px; } .console-label span { display: none; } }

@@ -1,0 +1,26 @@
+{
+  "name": "barcode-battler-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "dev:worker": "wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "typecheck": "tsc && tsc -p tsconfig.worker.json",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "db:local": "wrangler d1 migrations apply DB --local",
+    "db:remote": "wrangler d1 migrations apply DB --remote"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261023.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "wrangler": "^4.152.0"
+  },
+  "dependencies": {
+    "@zxing/browser": "^0.2.1"
+  }
+}
