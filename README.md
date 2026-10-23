@@ -37,18 +37,18 @@ R2には商品サムネイルを保存します。
 
 ```sh
 npx wrangler login
-npx wrangler d1 create barcode-battler
-npx wrangler r2 bucket create barcode-battler-images
 ```
 
-作成結果のD1 `database_id`を`wrangler.jsonc`に設定してから実行します。
+Wranglerがデプロイ時にD1データベースとR2バケットを自動作成します。
+初回デプロイ後にD1マイグレーションを適用します。
 
 ```sh
-npm run db:remote
 npm run deploy
+npm run db:remote
 ```
 
-CloudflareアカウントでD1/R2を有効にする必要があります。
+CloudflareアカウントでD1/R2を有効にする必要があります。デプロイ先の
+`bb2.koudenpa.net`ゾーンをCloudflareアカウントに追加しておいてください。
 認証情報や`.dev.vars`はコミットしないでください。
 
 ### Amazonアソシエイト商品検索（任意）
@@ -70,6 +70,16 @@ npx wrangler secret put AMAZON_ASSOCIATE_TAG
 フッターに「Amazonのアソシエイトとして、BarcodeBattler2-Simulator-Webは
 適格販売により収入を得ています。」と表示します。
 Creators APIの利用条件・表示要件に従ってください。
+
+### GitHub ActionsでのCI/CD
+
+`main`へのPull Requestではテスト・型チェック・ビルドを実行し、
+`main`へのpushでは成功後にCloudflare Workersへデプロイします。
+GitHubリポジトリの **Settings → Secrets and variables → Actions** に
+`CLOUDFLARE_API_TOKEN`（Cloudflare APIトークン）と
+`CLOUDFLARE_ACCOUNT_ID`（CloudflareアカウントID）をSecretsとして登録してください。
+`main`へのデプロイでD1・R2を自動作成し、D1マイグレーションを適用します。
+`bb2.koudenpa.net`のゾーンはCloudflareアカウントに追加しておく必要があります。
 
 ## 遊び方・対戦部屋
 

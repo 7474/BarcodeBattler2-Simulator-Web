@@ -3,6 +3,13 @@
   "name": "barcode-battler-web",
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-23",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "bb2.koudenpa.net",
+      "custom_domain": true
+    }
+  ],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
@@ -13,16 +20,12 @@
     {
       "binding": "DB",
       "database_name": "barcode-battler",
-      // Run `npx wrangler d1 create barcode-battler` and replace this ID.
-      // Initialize with `npx wrangler d1 migrations apply barcode-battler --remote`.
-      "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "migrations"
     }
   ],
   "r2_buckets": [
     {
       "binding": "IMAGES",
-      // Create before deployment: `npx wrangler r2 bucket create barcode-battler-images`.
       "bucket_name": "barcode-battler-images"
     }
   ]
