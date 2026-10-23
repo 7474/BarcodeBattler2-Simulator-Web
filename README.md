@@ -1,6 +1,10 @@
 # BarcodeBattler2-Simulator-Web
 
-バーコードバトラーIIの非公式ブラウザシミュレータ。参照実装:
+バーコードバトラーIIの非公式ブラウザシミュレータ。
+
+https://bb2.koudenpa.net/
+
+参照実装:
 [finalfighter/BarcodeBattler2-Simulator](https://github.com/finalfighter/BarcodeBattler2-Simulator)
 （ActionScript版、READMEにMIT表記）。元作品の画像・音声は使用していません。
 参照したリビジョンは`3211674dede14b5ecc334fd5934e5de7728cf19d`です。
