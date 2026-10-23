@@ -51,6 +51,25 @@ CloudflareアカウントでD1/R2を有効にする必要があります。デ�
 `bb2.koudenpa.net`ゾーンをCloudflareアカウントに追加しておいてください。
 認証情報や`.dev.vars`はコミットしないでください。
 
+### Amazonアソシエイト商品検索（任意）
+
+Amazonの商品検索リンクはアソシエイトID `koudenpa0a-22` を使い、API認証情報なしで表示します。
+商品情報の取得にもCreators APIを使う場合は、日本のアソシエイト・アカウントと
+APIクライアント認証情報をWorker Secretとして登録してください。
+認証情報があるときはバーコード検索を優先し、商品番号が一致した結果だけを採用します。
+一致しない場合やAPI認証情報がない場合はOpen Food Factsにフォールバックします。
+
+```sh
+npx wrangler secret put AMAZON_CLIENT_ID
+npx wrangler secret put AMAZON_CLIENT_SECRET
+```
+
+商品が特定できない場合も、読み取った番号でAmazonを検索するアフィリエイトリンクと
+通常リンクを分けて表示します。フッターには
+「Amazonのアソシエイトとして、BarcodeBattler2-Simulator-Webは
+適格販売により収入を得ています。」と表示します。
+Creators APIの利用条件・表示要件に従ってください。
+
 ### GitHub ActionsでのCI/CD
 
 `main`へのPull Requestではテスト・型チェック・ビルドを実行し、
@@ -98,9 +117,13 @@ GitHubリポジトリの **Settings → Secrets and variables → Actions** に
 
 ## 商品情報
 
-読み取った番号からOpen Food Factsで商品名を検索し、見つかった場合だけ表示します。
+Creators APIの認証情報がある場合はAmazonでバーコードを検索し、識別番号が一致した商品の
+名前とサムネイルを表示します。Amazonで解決できない場合はOpen Food Factsを検索します。
 食品以外や未登録商品はバーコード番号のまま表示します。検索障害で対戦は中断しません。
-画像は許可した配信元から取得し、サイズ・形式を制限してR2にキャッシュします。
+Open Food Facts画像は許可した配信元から取得し、サイズ・形式を制限してR2にキャッシュします。
+Amazonの商品画像はAmazonが返す画像URLを利用します。Amazon商品にはアフィリエイトリンクと
+アフィリエイトを含まない商品ページリンクを併記します。商品を特定できない場合は、
+バーコード（JAN/EAN/ISBN）でのAmazon検索リンクを併記します。
 商品情報を表示する際は[Open Food Facts](https://world.openfoodfacts.org/)の
 [データ利用条件](https://world.openfoodfacts.org/terms-of-use)
 （データベースODbL、個別コンテンツDbCL、画像CC BY-SA）を確認してください。

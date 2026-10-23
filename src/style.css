@@ -26,6 +26,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .fighters p { overflow-wrap: anywhere; }
 .stats { font-family: monospace; font-size: 1rem; font-weight: bold; }
 .product-image { width: 60px; height: 60px; object-fit: contain; float: right; }
+.product-links { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: .75rem; }
+.product-links a { color: #244d25; }
 .controls { margin-top: 24px; }
 label { display: block; font-size: .85rem; margin: 10px 0 5px; }
 .input-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }
@@ -44,5 +46,6 @@ summary { cursor: pointer; }
 .help h2 { font-size: 1.1rem; color: #f5c553; }
 footer { text-align: center; padding: 24px; }
 footer a { color: #f5c553; }
+footer p { color: #f5c553; }
 [hidden] { display: none !important; }
 @media (max-width: 540px) { .badge { display: none; } .fighters { grid-template-columns: 1fr; gap: 0; } .fighters article + article { border-top: 1px solid #61734d; } #rooms { grid-template-columns: 1fr; } nav button { flex: 1; padding: 10px; } .console-label span { display: none; } }
