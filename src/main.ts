@@ -90,7 +90,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           </div>
           <i class="vent vent-r" aria-hidden="true"></i>
         </div>
-        <p id="status" class="message" role="status">カードを読み込んでください</p>
+        <p id="status" class="message" role="status">カード待ち</p>
         <div id="room-bar" class="room-bar" hidden>
           <button id="room-prev" type="button" aria-label="前の部屋">◀</button>
           <div class="room-now"><b id="room-name">部屋を読み込み中…</b><span id="room-info"></span></div>
@@ -107,9 +107,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
     </div>
     <div class="keys">
-      <button id="key-onoff" class="key" type="button"><span class="key-label">ON/OFF</span><span class="key-cap"></span><span class="key-hint">リセット</span></button>
-      <button id="key-select" class="key" type="button"><span class="key-label">SELECT</span><span class="key-cap"></span><span class="key-hint" id="select-hint">モード切替</span></button>
-      <button id="key-set" class="key" type="button"><span class="key-label">SET</span><span class="key-cap"></span><span class="key-hint" id="set-hint">バトル開始</span></button>
+      <button id="key-onoff" class="key" type="button"><span class="key-label">ON/OFF</span><span class="key-cap"></span></button>
+      <button id="key-select" class="key" type="button"><span class="key-label">SELECT</span><span class="key-cap"></span></button>
+      <button id="key-set" class="key" type="button"><span class="key-label">SET</span><span class="key-cap"></span></button>
     </div>
     <div class="slot">
       <div class="slot-mouth"><span>CARD IN</span><i class="arrow-r"></i></div>
@@ -140,6 +140,20 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </section>
 
   <section class="console" aria-label="操作パネル">
+    <details class="guide" id="guide-box" open>
+      <summary>操作ガイド</summary>
+      <p class="guide-now" id="guide-now" aria-live="polite"></p>
+      <details class="guide-more"><summary>ボタンの役割</summary>
+      <dl class="guide-keys">
+        <dt>CARD IN</dt><dd>カメラか番号入力でカードを読み込みます。1P/2P・合体などの読み込み先を選べます。</dd>
+        <dt>L-BATTLE / R-BATTLE</dt><dd>自分の番に攻撃します。待機中はバトル開始（勝ち抜き部屋では挑戦）。</dd>
+        <dt>L-POWER / R-POWER</dt><dd>自分の番にPOWER（回復）を使います。薬草・魔法は下のパネルから使います。</dd>
+        <dt>SET</dt><dd>バトル・シナリオの開始、勝ち抜き部屋への挑戦。演出中は最後までスキップします（液晶のタップでも同じ）。</dd>
+        <dt>SELECT</dt><dd>C0 → C1 → C2 → 勝ち抜き部屋 の順にモードを切り替えます。</dd>
+        <dt>ON/OFF</dt><dd>リセットします。</dd>
+      </dl>
+      </details>
+    </details>
     <div class="settings" role="group" aria-label="演出の設定">
       <label>演出<select id="fx-mode"><option value="standard">標準</option><option value="device">実機再現（液晶・ビープ音）</option></select></label>
       <label>バトル速度<select id="speed"><option value="0.5">ゆっくり</option><option value="1">ふつう（実機）</option><option value="2">はやい</option><option value="4">最速</option></select></label>
@@ -152,7 +166,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <button type="button" data-mode="C1"><b>C1</b>冒険</button>
         <button type="button" data-mode="C2"><b>C2</b>挑戦</button>
       </div>
-      <p id="mode-help" class="hint"></p>
       <div id="campaign-setup" class="panel" hidden>
         <div class="field-row">
           <label>C2の敵バーコード（任意）<input id="enemy-barcode" inputmode="numeric" maxlength="18" placeholder="8桁または13桁"></label>
@@ -181,7 +194,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
     </div>
     <div id="room-controls" hidden>
-      <p class="hint">本体の CARD IN で1Pのカードを読み込み、液晶の下の ◀▶ で部屋を選んで SET（または L-BATTLE）で挑戦します。SELECT を押すとフリーバトルに戻ります。勝者が部屋に残ります。合体・アイテムは使えません。</p>
       <button id="refresh" class="ghost" type="button">部屋を更新</button>
       <div id="rooms"></div>
     </div>
@@ -189,7 +201,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <details class="log-drawer"><summary>バトルログ</summary><ol id="log"></ol></details>
   </section>
   <section class="help"><details><summary>遊び方と注意</summary>
-    <p>下の CARD IN で 1P と 2P のカードを読み込み、SET（または L-BATTLE / R-BATTLE）でバトル開始。自分の番に BATTLE で攻撃、POWER で回復します。光っている側のボタンが操作できます。薬草・魔法は操作パネルから使います。</p>
+    <p>ボタンの役割は操作パネル上部の「操作ガイド」にまとめています。光っているボタンがいま操作できます。</p>
     <p>カードは種族0〜4がキャラカード（機械族・アニマル族・魚族・バード族・ヒューマン族）、5〜9がアイテムカード（武器・防具・HPアップ）です。職業0〜6は戦士、7〜9は魔法使いで、どちらになるかは読み込んだバーコードで決まります。</p>
     <p>SELECT でモードを切り替えます。C1/C2 は 1P に職業が戦士のキャラカード、2P に職業が魔法使いのキャラカード（任意）を読み込んで SET。C2 は SET 後に「C2の敵」へ敵のキャラカードを読み込みます。アイテムカードは直前に読み込んだキャラカードに合体します。</p>
     <p>カメラはHTTPSまたはlocalhostと、ブラウザの許可が必要です。映像は端末の中だけで解析し、サーバーへ送りません。読めないときは数字を入力できます。</p>
@@ -514,7 +526,7 @@ function showFrame(frame: Frame) {
   if (frame.attacker) sweepLeds(frame.attacker)
   const text = summarize(frame.lines)
   if (frame.lines.length) beep(frame.lines.some(line => line.includes('MISS')) ? 440 : frame.lines.some(line => line.includes('CRITICAL')) ? 2200 : 1760)
-  if (text) status(`${text}（SETでスキップ）`)
+  if (text) status(text)
   render()
 }
 /**
@@ -533,9 +545,9 @@ async function play(frames: Frame[]) {
     if (fxMode === 'device') {
       for (let index = 1; index < frames.length && !token.skipped; index++) {
         const action = parseAction(frames[index].lines)
-        if (action) status(`${summarize(frames[index].lines.slice(0, 1)).replace(/ (MISS|\d+ダメージ)$/, ' …')}（SETでスキップ）`)
+        if (action) status(summarize(frames[index].lines.slice(0, 1)).replace(/ (MISS|\d+ダメージ)$/, ' …'))
         await animateAction(state, index, token)
-        if (action && !token.skipped) status(`${summarize(frames[index].lines)}（SETでスキップ）`)
+        if (action && !token.skipped) status(summarize(frames[index].lines))
       }
       if (!token.skipped) await animateEnd(frames[frames.length - 1], token)
     } else {
@@ -770,9 +782,11 @@ function render() {
   const needsCampaign = mode !== 'C0' && !campaign
   setKey.disabled = playing() ? false : online ? !canChallenge() : busy || fighting || (needsCampaign ? !slots.left : !readyToFight())
   setKey.classList.toggle('ready', !setKey.disabled)
-  $('set-hint').textContent = playing() ? 'スキップ' : online ? '挑戦' : needsCampaign ? 'シナリオ開始' : 'バトル開始'
+  setKey.setAttribute('aria-label', `SET（${playing() ? 'スキップ' : online ? '挑戦' : needsCampaign ? 'シナリオ開始' : 'バトル開始'}）`)
   $<HTMLButtonElement>('key-select').disabled = busy || fighting
-  $('select-hint').textContent = online ? 'フリーへ' : mode === 'C2' ? '勝ち抜きへ' : 'モード切替'
+  $('key-select').setAttribute('aria-label', `SELECT（${online ? 'フリーバトルへ' : mode === 'C2' ? '勝ち抜き部屋へ' : 'モード切替'}）`)
+  $('key-onoff').setAttribute('aria-label', 'ON/OFF（リセット）')
+  $('guide-now').textContent = guideNow(needsCampaign)
   renderRoomBar()
   $('battle-actions').hidden = !battling() || playing()
   if (battling() && !playing() && duel) {
@@ -791,14 +805,35 @@ function render() {
     button.setAttribute('aria-pressed', String(button.dataset.mode === mode))
     button.disabled = fighting
   })
-  $('mode-help').textContent = mode === 'C0'
-    ? '1Pと2Pのカードを読み込み、SETでバトル開始。両方のプレイヤーが交互に操作します。'
-    : mode === 'C1'
-      ? '1Pに職業が戦士のキャラカード、2Pに職業が魔法使いのキャラカード（任意）を読み込んでSET。L-1〜L-5の敵と戦い、鍵3個でL-Hが開きます。'
-      : '1Pに職業が戦士のキャラカード、2Pに職業が魔法使いのキャラカード（任意）を読み込んでSET。敵のキャラカードは「C2の敵」へ読み込むか下の欄に入力します。'
   $('campaign-setup').hidden = mode === 'C0' || !!campaign
 }
 
+/** The next thing to do, shown in the guide outside the unit (never on the LCD message). */
+function guideNow(needsCampaign: boolean) {
+  if (playing()) return 'いま: 演出中。SET か液晶のタップで最後までスキップできます。'
+  if (online) {
+    if (!challenger()) return 'いま: CARD IN で1Pのキャラカードを読み込みます。アイテムカード・合体は使えません。'
+    const restriction = roomRestriction(currentRoom(), challenger())
+    return restriction ? `いま: ${restriction}。液晶下の ◀ ▶ で部屋を選べます。` : 'いま: 液晶下の ◀ ▶ で部屋を選び、SET（または L-BATTLE）で挑戦します。'
+  }
+  if (battling() && duel) {
+    const turn = duel.snapshot().turn
+    if (!controllable(turn)) return 'いま: 敵の番です。'
+    const button = turn === 'left' ? 'L' : 'R'
+    return `いま: ${turn === 'left' ? (campaign ? '主人公' : '1P') : '2P'}の番。${button}-BATTLE で攻撃、${button}-POWER で回復。薬草・魔法は下のパネルから。`
+  }
+  if (campaign?.defeated) return 'いま: GAME OVER。1Pのキャラカードを読み込み直すと再挑戦できます。'
+  if (campaign?.complete) return 'いま: シナリオクリア。ON/OFF でリセットできます。'
+  if (mode === 'C0') {
+    if (!slots.left || !slots.right) return `いま: CARD IN で${!slots.left ? '1P' : '2P'}のキャラカードを読み込みます。アイテムカードは直前のキャラに合体します。`
+    return 'いま: SET（または L-BATTLE / R-BATTLE）でバトル開始。1Pと2Pが交互に操作します。'
+  }
+  if (needsCampaign) {
+    if (!slots.left) return `いま: CARD IN で1Pに職業が戦士のキャラカード、2Pに職業が魔法使いのキャラカード（任意）を読み込みます。`
+    return `いま: SET でシナリオ開始。${mode === 'C1' ? 'L-1〜L-5の敵と戦い、鍵3個でL-Hが開きます。' : '敵は「C2の敵」へ読み込むか、下の欄に入力します。'}`
+  }
+  return `いま: SET で次のバトル。${mode === 'C2' ? '敵は「C2の敵」へ読み込んで変更できます。' : ''}`
+}
 function setTarget(value: string) { target = value }
 function nextTargetAfter(side: Side, wasCard: boolean) {
   if (online || wasCard) return
@@ -830,7 +865,7 @@ async function loadBarcode(barcode: string) {
       }
       status('C2の敵を読み込み中…')
       await animateCardIn('right', null)
-      status(campaign?.mode === 'C2' ? 'C2の敵を読み込みました。SETでバトル開始' : `C2の敵を設定しました ${fighter.barcode}`)
+      status(campaign?.mode === 'C2' ? 'C2の敵を読み込みました' : `C2の敵を設定しました ${fighter.barcode}`)
       render()
       return
     }
@@ -867,8 +902,7 @@ async function loadBarcode(barcode: string) {
     roomFight = null
     nextTargetAfter(side, isCard)
     const loaded = isCard ? `${side === 'left' ? '1P' : '2P'}に${fighter.name}を合体` : `${SLOT_NAMES[side]} ${fighter.name} 読み込み完了`
-    const next = online ? (canChallenge() ? ' — SETで挑戦' : ` — ${roomRestriction(currentRoom(), challenger())}`)
-      : slots.left && slots.right && mode === 'C0' ? ' — SETでバトル開始' : ''
+    const next = online && !canChallenge() ? ` — ${roomRestriction(currentRoom(), challenger())}` : ''
     flashIndicators([])
     $<HTMLInputElement>('barcode').value = ''
     const lookup = (async () => {
@@ -944,8 +978,7 @@ function showDuel(newLines: string[]) {
     if (fxMode !== 'device') beep(880, 0.35)
   } else {
     const who = snapshot.turn === 'left' ? (campaign ? '主人公' : '1P') : (campaign ? '敵' : '2P')
-    const button = snapshot.turn === 'left' ? 'L' : 'R'
-    status(`${summary ? `${summary} — ` : `守護星${snapshot.star + 1} `}${who}の番: ${button}-BATTLE で攻撃 / ${button}-POWER で回復`)
+    status(`${summary || `守護星${snapshot.star + 1}`} — ${who}の番`)
   }
   if (snapshot.result && campaign && !campaignDuelResolved) {
     campaign = finishCampaignBattle(campaign, snapshot.result, snapshot)
@@ -954,8 +987,8 @@ function showDuel(newLines: string[]) {
     duelOriginal = null
     if (!campaign.complete && !campaign.defeated) slots.right = campaignEnemy(campaign)
     status(campaign.complete ? 'シナリオクリア！' : campaign.defeated
-      ? 'GAME OVER — 主人公を読み直して再挑戦'
-      : `${snapshot.result.winner === 'left' ? '勝利！' : '主人公を交代'} SETで次のバトル`)
+      ? 'GAME OVER'
+      : snapshot.result.winner === 'left' ? '勝利！' : '主人公を交代')
     updateCampaignStatus()
   }
   render()
@@ -1049,7 +1082,7 @@ $('key-set').addEventListener('click', () => {
   else startBattle()
 })
 
-function resetAll(message = 'カードを読み込んでください') {
+function resetAll(message = 'カード待ち') {
   stopCamera()
   clearDuel()
   slots.left = slots.right = null
@@ -1083,7 +1116,7 @@ function setMode(next: Mode) {
   guardianStar = undefined
   updateCampaignStatus()
   if (target === 'enemy' && mode !== 'C2') setTarget('left')
-  status(`${MODE_NAMES[mode]}（${mode}）${mode === 'C0' ? ' — 1Pと2Pを読み込んでSET' : ' — 1Pに職業が戦士のキャラカードを読み込んでSET'}`)
+  status(`${MODE_NAMES[mode]}（${mode}）`)
   sfx(SOUNDS.select, 1320)
   render()
 }
@@ -1117,7 +1150,7 @@ $('sample').addEventListener('click', async () => {
   await loadBarcode('4901234567894')
   setTarget('right')
   await loadBarcode('96385074')
-  status('サンプルの1Pと2Pを読み込みました。SETでバトル開始')
+  status('サンプルの1Pと2Pを読み込みました')
 })
 
 function startCampaign() {
@@ -1151,7 +1184,7 @@ function startCampaign() {
     if (campaignMode === 'C2') setTarget('enemy')
     sweepLeds('both')
     beep(1320, 0.18)
-    status(`シナリオ開始${note} — SETでバトル`)
+    status(`シナリオ開始${note}`)
     render()
   } catch (error) { status(errorMessage(error)) }
 }
@@ -1240,7 +1273,7 @@ function openCamera() {
 $('camera').addEventListener('click', openCamera)
 $('stop-camera').addEventListener('click', () => {
   stopCamera()
-  status('カメラを閉じました。数字を入力することもできます。')
+  status('カメラを閉じました')
   render()
 })
 $('torch').addEventListener('click', () => {
@@ -1324,7 +1357,7 @@ async function refreshRooms() {
     roomIndex = Math.max(0, rooms.findIndex(room => room.id === selected))
     render()
     renderRoomList()
-  } catch (error) { status(`対戦部屋: ${errorMessage(error)}（Cloudflare Workerを起動してください）`) }
+  } catch (error) { status(`対戦部屋: ${errorMessage(error)}`) }
 }
 /** Worker battles put the champion on the left; show the challenger as 1P. */
 function fromChampionView(line: string) {
@@ -1364,7 +1397,7 @@ async function challengeCurrent() {
   const room = currentRoom()
   const fighter = challenger()
   if (busy || !room) return
-  if (!fighter) { status('先にCARD INで1Pのカードを読み込んでください'); return }
+  if (!fighter) { status('1Pのキャラカードが未読み込みです'); return }
   const restriction = roomRestriction(room, fighter)
   if (restriction) { status(restriction); return }
   busy = true
@@ -1383,7 +1416,7 @@ async function challengeCurrent() {
     const lines = (result.battle?.log || []).map(fromChampionView)
     log(lines)
     if (result.battle && championBefore) {
-      status('バトル開始！（SETでスキップ）')
+      status('バトル開始！')
       sweepLeds('both')
       await play(roomFrames(lines, fighter, championBefore, { left: result.battle.rightHp, right: result.battle.leftHp }))
     }
@@ -1417,7 +1450,7 @@ function setOnline(value: boolean) {
   $('room-controls').hidden = !value
   if (value) {
     setTarget('left')
-    status(challenger() ? '勝ち抜き部屋: ◀▶で部屋を選び、SETで挑戦' : '勝ち抜き部屋: CARD INで1Pのカードを読み込み、SETで挑戦')
+    status('勝ち抜き部屋')
   } else status(`${MODE_NAMES[mode]}（${mode}）`)
   beep(1320)
   render()
@@ -1427,6 +1460,9 @@ const showUnit = () => document.querySelector('.bb2')?.scrollIntoView({ behavior
 $('local-tab').addEventListener('click', () => { setOnline(false); showUnit() })
 $('rooms-tab').addEventListener('click', () => { setOnline(true); showUnit() })
 $('refresh').addEventListener('click', () => void refreshRooms())
+const guideBox = $<HTMLDetailsElement>('guide-box')
+try { if (localStorage.getItem('bb2-guide') === 'closed') guideBox.open = false } catch { /* Not persisted. */ }
+guideBox.addEventListener('toggle', () => { try { localStorage.setItem('bb2-guide', guideBox.open ? 'open' : 'closed') } catch { /* Not persisted. */ } })
 const fxSelect = $<HTMLSelectElement>('fx-mode'), speedSelect = $<HTMLSelectElement>('speed'), soundSelect = $<HTMLSelectElement>('sound')
 fxSelect.value = fxMode
 speedSelect.value = String(speed)

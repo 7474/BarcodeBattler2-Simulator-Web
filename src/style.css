@@ -261,9 +261,8 @@ button:disabled { cursor: not-allowed; }
 }
 .key:active:not(:disabled) .key-cap { translate: 0 2px; box-shadow: 0 1px 0 var(--button-lo), inset 0 1px 0 rgba(255, 255, 255, .4); }
 .key:disabled .key-cap { filter: saturate(.25) brightness(.6); }
-.key:disabled .key-label, .key:disabled .key-hint { opacity: .45; }
+.key:disabled .key-label { opacity: .45; }
 .key.ready .key-cap { animation: pulse 1.2s ease-in-out infinite; }
-.key-hint { font-size: clamp(.52rem, 1.7vw, .68rem); color: #a9abb2; }
 
 /* ---------- CARD IN slot ---------- */
 .slot {
@@ -328,6 +327,14 @@ button:disabled { cursor: not-allowed; }
 .logo em { margin-left: .3em; font-family: Georgia, serif; }
 
 /* ---------- Console under the handheld ---------- */
+.guide { margin-bottom: 12px; padding: 8px 12px; border-radius: 12px; background: #fff; border: 1px solid var(--panel-line); }
+.guide summary { cursor: pointer; font-weight: 800; }
+.guide-now { margin: 6px 0; font-weight: 700; color: var(--accent); }
+.guide-more summary { font-size: .8rem; font-weight: 700; color: var(--page-muted); }
+.guide-keys { display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; margin: 6px 0 2px; font-size: .8rem; }
+.guide-keys dt { font-weight: 800; white-space: nowrap; }
+.guide-keys dd { margin: 0; color: var(--page-muted); }
+@media (max-width: 420px) { .guide-keys { grid-template-columns: 1fr; } .guide-keys dd { margin-bottom: 4px; } }
 .settings { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px dashed var(--panel-line); }
 .settings label { display: flex; flex-direction: column; gap: 2px; flex: 1 1 140px; font-size: .76rem; font-weight: 700; color: var(--page-muted); }
 .barcodes { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
@@ -357,7 +364,7 @@ button:disabled { cursor: not-allowed; }
 .modes button b { margin-right: 6px; font-family: ui-monospace, Menlo, Consolas, monospace; }
 .tabs button[aria-pressed="true"], .modes button[aria-pressed="true"] { background: var(--shell); color: #fff; border-color: var(--shell); }
 .modes button:disabled { opacity: .5; }
-.hint, #mode-help { margin: 0 0 10px; font-size: .82rem; color: var(--page-muted); }
+.hint { margin: 0 0 10px; font-size: .82rem; color: var(--page-muted); }
 .panel { margin: 0 0 10px; padding: 10px; border-radius: 12px; background: #fff; border: 1px solid var(--panel-line); }
 .panel p { margin: 0 0 8px; }
 #campaign-status, #turn { font-weight: 800; }
