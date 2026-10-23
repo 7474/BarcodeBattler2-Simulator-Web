@@ -1,7 +1,7 @@
 import './style.css'
 import type { IScannerControls } from '@zxing/browser'
 import { createBattle, combineFighters, decodeBarcode, MAGIC_COSTS, type BattleAction, type BattleSession, type Fighter } from './game.ts'
-import { campaignEnemy, createCampaign, nextCampaignBattle, type Campaign } from './campaign.ts'
+import { campaignEnemy, createCampaign, finishCampaignBattle, selectCampaignWorld, setCampaignEnemy, switchCampaignHero, type Campaign } from './campaign.ts'
 
 type Product = { name: string; thumbnail: string | null }
 type Room = { id: string; name: string; barcodePrefix: string | null; champion: { barcode: string; wins: number; isOwner?: boolean; product?: Product | null } | null }
@@ -26,6 +26,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
             <label for="password">パスワード（任意）</label><input id="password" inputmode="numeric" maxlength="5" placeholder="3桁または5桁">
           </div>
           <p id="campaign-status" hidden></p>
+          <div id="campaign-controls" class="input-row" hidden><button id="switch-hero">主人公を交代</button><button id="set-enemy">C2の敵を設定</button><span id="world-controls"><select id="world" aria-label="C1ワールド"><option value="1">L-1</option><option value="2">L-2</option><option value="3">L-3</option><option value="4">L-4</option><option value="5">L-5</option><option value="H">L-H（鍵3個）</option></select> <button id="set-world">ワールドへ移動</button></span></div>
           <div class="input-row"><button id="fight" class="primary" disabled>⚔ BATTLE</button><button id="reset">リセット</button></div>
           <div id="battle-actions" hidden>
             <p id="turn"></p>
@@ -38,7 +39,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
       <details><summary>バトルログ</summary><ol id="log"></ol></details>
     </section>
-    <section class="help"><h2>遊び方</h2><p>1Pと2Pのバーコードを読み込んで対戦、または1Pの戦士で対戦部屋に挑戦してください。ローカルでは「合体・アイテム」を選び、2枚目を読み込めます。対戦部屋では元の1枚のみを使います。カメラを使えない場合は数字を入力できます。</p><p>「国内49コード」部屋は49で始まるコード専用。「無差別」部屋はすべての有効なJAN/EANコードが対象です。商品名・画像は見つかった場合のみ表示されます。</p><p>カメラにはHTTPSまたはlocalhostとアクセス許可が必要です。映像をサーバーへ送信することはありません。</p></section>
+    <section class="help"><h2>遊び方</h2><p>1Pと2Pのバーコードを読み込んで対戦、または1Pの戦士で対戦部屋に挑戦してください。ローカルでは「合体・アイテム」を選び、2枚目を読み込めます。対戦部屋では元の1枚のみを使います。カメラを使えない場合は数字を入力できます。</p><p>「国内49コード」部屋は49で始まるコード専用。「無差別」部屋はすべての有効なJAN/EANコードが対象です。商品名・画像は見つかった場合のみ表示されます。</p><p>カメラにはHTTPSまたはlocalhostとアクセス許可が必要です。映像をサーバーへ送信することはありません。</p><p>逃走・戦闘後アイテムなど一部の実機操作は未対応です。</p></section>
   </main><footer>非公式ファンプロジェクト · 原作ゲーム・商標の権利は各権利者に帰属します<br>商品データ: <a href="https://world.openfoodfacts.org/" target="_blank" rel="noreferrer">Open Food Facts</a>（ODbL / 画像 CC BY-SA）</footer>`
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
@@ -50,6 +51,8 @@ const heroCards = new Map<'left' | 'right', string>()
 let campaign: Campaign | null = null
 let duel: BattleSession | null = null
 let duelOriginal: { left: Fighter; right: Fighter } | null = null
+let campaignDuelResolved = false
+let guardianStar: 0 | 1 | 2 | undefined
 let online = false
 let busy = false
 let scanner: IScannerControls | undefined
@@ -73,6 +76,10 @@ async function api<T>(path: string, body?: object): Promise<T> {
   const data = await response.json()
   if (!response.ok) throw new Error(data.error?.message || '通信に失敗しました')
   return data as T
+}
+function ensureSession() {
+  session ??= api('/api/session').catch(error => { session = undefined; throw error })
+  return session
 }
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : '処理に失敗しました' }
 function clearDuel() {
@@ -117,6 +124,12 @@ async function loadBarcode(barcode: string) {
     if (target === 'enemy') {
       if (fighter.kind !== 'fighter') throw new Error('敵にはキャラクターのコードを指定してください')
       $<HTMLInputElement>('enemy-barcode').value = fighter.barcode
+      if (campaign?.mode === 'C2' && (!duel || duel.snapshot().result)) {
+        campaign = setCampaignEnemy(campaign, fighter.barcode)
+        slots.right = campaignEnemy(campaign)
+        updateCampaignStatus()
+        render()
+      }
       status('C2の敵を読み込みました')
       return
     }
@@ -136,14 +149,16 @@ async function loadBarcode(barcode: string) {
       combined.delete(side)
       secondCards.delete(side)
     }
-    if (side === 'left' && campaign) {
+    if (campaign) {
       campaign = null
       $('campaign-status').hidden = true
+      $('campaign-controls').hidden = true
     }
     status(`${side === 'left' ? '1P' : '2P'} 読み込み完了`)
     render()
     if (side === 'left' && !online) $<HTMLSelectElement>('slot').value = 'right'
     try {
+      await ensureSession()
       const result = await api<{ product: Product | null }>(`/api/products/${fighter.barcode}`)
       if (result.product) products.set(fighter.barcode, result.product)
       render()
@@ -156,26 +171,20 @@ $('scan-form').addEventListener('submit', event => {
 })
 $('fight').addEventListener('click', () => {
   if (!slots.left || !slots.right) return
-  if (campaign && !online) {
-    try {
-      const outcome = nextCampaignBattle(campaign)
-      campaign = outcome.state
-      slots.left = campaign.hero
-      if (!campaign.complete && !campaign.defeated) slots.right = campaignEnemy(campaign)
-      status(campaign.complete ? 'シナリオクリア！' : campaign.defeated ? 'GAME OVER — 戦士を読み直して再挑戦' : `ステージ ${campaign.stage + 1} へ`)
-      $('campaign-status').textContent = `${campaign.mode} / ステージ ${campaign.stage + 1}`
-      log(outcome.result.log)
-      render()
-    } catch (error) { status(errorMessage(error)) }
-    return
-  }
   try {
     if (duel && !duel.snapshot().result) {
       while (!duel.snapshot().result) duel.auto()
     } else {
       clearDuel()
+      if (campaign) {
+        slots.left = campaign.hero
+        slots.right = campaignEnemy(campaign)
+      }
       duelOriginal = { left: slots.left!, right: slots.right! }
-      duel = createBattle(slots.left!, slots.right!)
+      duel = createBattle(slots.left!, slots.right!, Math.random, { star: campaign?.star ?? guardianStar })
+      guardianStar = duel.snapshot().star
+      campaignDuelResolved = false
+      if (campaign && duel.snapshot().turn === 'right' && !duel.snapshot().result) duel.auto()
     }
     showDuel()
   } catch (error) { status(errorMessage(error)) }
@@ -194,11 +203,25 @@ function showDuel() {
   status(snapshot.result
     ? `${snapshot.result.winner === 'left' ? '1P' : '2P'} WIN! — ${snapshot.rounds}ターン`
     : `${snapshot.turn === 'left' ? '1P' : '2P'} の操作を選んでください`)
+  if (snapshot.result && campaign && !campaignDuelResolved) {
+    campaign = finishCampaignBattle(campaign, snapshot.result, snapshot)
+    campaignDuelResolved = true
+    slots.left = campaign.hero
+    if (!campaign.complete && !campaign.defeated) slots.right = campaignEnemy(campaign)
+    status(campaign.complete ? 'シナリオクリア！' : campaign.defeated
+      ? 'GAME OVER — 主人公を読み直して再挑戦'
+      : `${snapshot.result.winner === 'left' ? '勝利！' : '主人公を交代'} 次の戦闘を開始できます`)
+    updateCampaignStatus()
+  }
   render()
 }
 function act(action: BattleAction) {
   if (!duel) return
-  try { duel.act(action); showDuel() }
+  try {
+    duel.act(action)
+    if (campaign && duel.snapshot().turn === 'right' && !duel.snapshot().result) duel.auto()
+    showDuel()
+  }
   catch (error) { status(errorMessage(error)) }
 }
 $('attack').addEventListener('click', () => act({ type: 'attack', timing: Number($<HTMLSelectElement>('timing').value) as 1 | 2 }))
@@ -212,7 +235,9 @@ $('reset').addEventListener('click', () => {
   secondCards.clear()
   heroCards.clear()
   campaign = null
+  guardianStar = undefined
   $('campaign-status').hidden = true
+  $('campaign-controls').hidden = true
   $('log').replaceChildren()
   status('バーコードを読み取ってください')
   $<HTMLSelectElement>('slot').value = 'left'
@@ -221,7 +246,9 @@ $('reset').addEventListener('click', () => {
 $('game-mode').addEventListener('change', () => {
   clearDuel()
   campaign = null
+  guardianStar = undefined
   $('campaign-status').hidden = true
+  $('campaign-controls').hidden = true
   $('start-campaign').hidden = $<HTMLSelectElement>('game-mode').value === 'C0'
   $('campaign-setup').hidden = $<HTMLSelectElement>('game-mode').value === 'C0'
   status($<HTMLSelectElement>('game-mode').value === 'C0'
@@ -240,9 +267,54 @@ $('start-campaign').addEventListener('click', () => {
     })
     slots.left = campaign.hero
     slots.right = campaignEnemy(campaign)
-    $('campaign-status').hidden = false
-    $('campaign-status').textContent = `${mode} / ステージ ${campaign.stage + 1}`
+    updateCampaignStatus()
     status('シナリオ開始 — BATTLEで次の戦闘へ')
+    render()
+  } catch (error) { status(errorMessage(error)) }
+})
+function updateCampaignStatus() {
+  $('campaign-status').hidden = !campaign
+  $('campaign-controls').hidden = !campaign
+  if (!campaign) return
+  $('campaign-status').textContent = campaign.mode === 'C1'
+    ? `${campaign.enemyName} / 鍵 ${3 - campaign.keys.length}/3 / ${campaign.stage}勝`
+    : `C2 / ${campaign.enemyName} / ${campaign.stage}勝`
+  $('set-enemy').hidden = campaign.mode !== 'C2'
+  $('world-controls').hidden = campaign.mode !== 'C1'
+  $<HTMLButtonElement>('switch-hero').disabled = !campaign.partner || campaign.partner.hp <= 0 || campaign.complete || campaign.defeated
+  $<HTMLButtonElement>('set-enemy').disabled = campaign.complete || campaign.defeated
+}
+$('switch-hero').addEventListener('click', () => {
+  if (!campaign || (duel && !duel.snapshot().result)) { status('戦闘中は交代できません'); return }
+  try {
+    clearDuel()
+    campaign = switchCampaignHero(campaign)
+    slots.left = campaign.hero
+    slots.right = campaignEnemy(campaign)
+    updateCampaignStatus()
+    render()
+  } catch (error) { status(errorMessage(error)) }
+})
+$('set-world').addEventListener('click', () => {
+  if (!campaign || (duel && !duel.snapshot().result)) { status('戦闘中は移動できません'); return }
+  try {
+    clearDuel()
+    const world = $<HTMLSelectElement>('world').value
+    campaign = selectCampaignWorld(campaign, world === 'H' ? 'H' : Number(world) as 1 | 2 | 3 | 4 | 5)
+    slots.left = campaign.hero
+    slots.right = campaignEnemy(campaign)
+    updateCampaignStatus()
+    render()
+  } catch (error) { status(errorMessage(error)) }
+})
+$('set-enemy').addEventListener('click', () => {
+  if (!campaign || (duel && !duel.snapshot().result)) { status('戦闘中は敵を変更できません'); return }
+  try {
+    clearDuel()
+    campaign = setCampaignEnemy(campaign, $<HTMLInputElement>('enemy-barcode').value.trim())
+    slots.left = campaign.hero
+    slots.right = campaignEnemy(campaign)
+    updateCampaignStatus()
     render()
   } catch (error) { status(errorMessage(error)) }
 })
@@ -326,8 +398,7 @@ async function challenge(id: string) {
   render()
   $('rooms').querySelectorAll('button').forEach(button => { button.disabled = true })
   try {
-    session ??= api('/api/session').catch(error => { session = undefined; throw error })
-    await session
+    await ensureSession()
     const result = await api<{ message: string; battle?: { log: string[] } }>(`/api/rooms/${encodeURIComponent(id)}/challenge`, { barcode: slots.left.barcode })
     status(result.message)
     log(result.battle?.log || [])

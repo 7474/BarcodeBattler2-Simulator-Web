@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { campaignEnemy, campaignPassword, createCampaign, nextCampaignBattle, setCampaignEnemy, useCampaignPassword } from '../src/campaign.ts'
+import { campaignEnemy, campaignPassword, createCampaign, finishCampaignBattle, nextCampaignBattle, selectCampaignEnemy, selectCampaignHero, selectCampaignWorld, setCampaignEnemy, switchCampaignHero, useCampaignPassword } from '../src/campaign.ts'
 import type { Campaign } from '../src/campaign.ts'
 import { createBattle, decodeBarcode } from '../src/game.ts'
 
@@ -174,7 +174,7 @@ test('campaigns carry CPU-spent herbs and magic through the battle instead of re
   const state = strong(createCampaign('C2', heroCode))
   state.hero.hp = 100
   state.hero.pp = 5
-  const session = createBattle(state.hero, campaignEnemy(state), seeded(7))
+  const session = createBattle(state.hero, campaignEnemy(state), seeded(7), { star: state.star })
   let snapshot = session.snapshot()
   while (!snapshot.result) snapshot = session.auto()
   const next = nextCampaignBattle(state, seeded(7))
@@ -215,4 +215,101 @@ test('C1 original starting powerup passwords and UI setup options apply real rul
   assert.equal(equipped.hero.attack, 4500)
   assert.equal(campaignEnemy(equipped).barcode, '4901234567894')
   assert.equal(equipped.hero.hp, 11500)
+})
+
+test('two-hero party switching preserves separate resources and original hero bases', () => {
+  const magician = card('050191907018')
+  const state = createCampaign('C1', heroCode, undefined, { magicianBarcode: magician })
+  assert.equal(state.partner?.job, 7)
+  assert.equal(state.party.warrior.barcode, heroCode)
+  assert.equal(state.party.magician?.barcode, magician)
+  assert.equal(state.activeHero, 'warrior')
+  const changed = switchCampaignHero(state)
+  assert.equal(changed.hero.barcode, magician)
+  assert.equal(changed.partner?.barcode, heroCode)
+  assert.equal(changed.baseHero.barcode, magician)
+  assert.equal(changed.activeHero, 'magician')
+  assert.equal(changed.party.warrior.barcode, heroCode)
+  assert.equal(changed.party.magician?.barcode, magician)
+  assert.deepEqual(switchCampaignHero(changed), state)
+  const powered = useCampaignPassword(state, '815')
+  assert.equal(powered.partner?.hp, 7400)
+  assert.equal(powered.partner?.attack, 2700)
+  assert.throws(() => switchCampaignHero(createCampaign('C1', heroCode)), /reserve/)
+  assert.equal(selectCampaignHero(state, 'warrior'), state)
+  assert.equal(selectCampaignHero(state, 'magician').hero.barcode, magician)
+  assert.equal(selectCampaignEnemy, setCampaignEnemy)
+})
+
+test('defeating one hero switches to living reserve and keeps enemy damage, not game over', () => {
+  const magician = card('050191907018')
+  let state = createCampaign('C2', heroCode, undefined, { magicianBarcode: magician })
+  state = setCampaignEnemy(state, '4901234567894')
+  state.hero = { ...state.hero, hp: 100, attack: 0, defense: 0, speed: 0, mp: 0, pp: 0 }
+  const outcome = nextCampaignBattle(state, seeded(9))
+  assert.equal(outcome.result.winner, 'right')
+  assert.equal(outcome.state.defeated, false)
+  assert.equal(outcome.state.stage, 0)
+  assert.equal(outcome.state.hero.barcode, magician)
+  assert.equal(outcome.state.partner?.hp, 0)
+  assert.equal(campaignEnemy(outcome.state).hp, outcome.result.rightHp)
+  assert.throws(() => switchCampaignHero(outcome.state), /reserve/)
+  const bothDead = { ...outcome.state, hero: { ...outcome.state.hero, hp: 100, attack: 0, defense: 0, speed: 0, mp: 0, pp: 0 } }
+  assert.equal(nextCampaignBattle(bothDead, seeded(10)).state.defeated, true)
+})
+
+test('C1 chapter transition powers up and revives both original party heroes', () => {
+  const magician = card('050191907018')
+  let state = strong(createCampaign('C1', heroCode, undefined, { magicianBarcode: magician }))
+  state = { ...state, world: 5, enemy: 4, keys: [], partner: { ...state.partner!, hp: 0 } }
+  const next = nextCampaignBattle(state, seeded(11)).state
+  assert.equal(next.chapter, 1)
+  assert.equal(next.hero.hp, 11500)
+  assert.equal(next.partner?.hp, 11500)
+  assert.equal(next.partner?.mp, 10)
+})
+
+test('interactive completion shares automatic progression and carries final snapshot resources', () => {
+  const state = strong(createCampaign('C1', heroCode))
+  const session = createBattle(state.hero, campaignEnemy(state), seeded(12), { star: state.star })
+  let snapshot = session.snapshot()
+  while (!snapshot.result) snapshot = session.auto()
+  const completed = finishCampaignBattle(state, snapshot.result, snapshot)
+  assert.deepEqual(finishCampaignBattle(state, snapshot), completed)
+  assert.deepEqual(completed, nextCampaignBattle(state, seeded(12)).state)
+  const resultOnly = finishCampaignBattle(state, snapshot.result)
+  assert.equal(resultOnly.stage, 1)
+  assert.equal(resultOnly.hero.hp, snapshot.result.leftHp)
+  assert.equal(resultOnly.hero.mp, snapshot.result.leftMp)
+  assert.deepEqual(resultOnly, completed)
+  assert.throws(() => finishCampaignBattle({ ...state, complete: true }, snapshot.result!), /finished/)
+})
+
+test('C1 selectable worlds retain defeated encounters and enforce the hidden-world key gate', () => {
+  const state = createCampaign('C1', heroCode)
+  assert.throws(() => selectCampaignWorld(state, 'H'), /three keys/)
+  assert.throws(() => selectCampaignWorld(state, 0), /Invalid world/)
+  assert.throws(() => selectCampaignWorld(createCampaign('C2', heroCode), 1), /requires C1/)
+  let selected = selectCampaignWorld(state, 3)
+  assert.equal(selected.world, 2)
+  assert.equal(campaignEnemy(selected).race, 2)
+  selected = nextCampaignBattle(strong(selected), seeded(13)).state
+  assert.equal(selected.enemy, 1)
+  selected = selectCampaignWorld(selected, 1)
+  selected = selectCampaignWorld(selected, 3)
+  assert.equal(selected.enemy, 1)
+  const hidden = selectCampaignWorld({ ...selected, keys: [] }, 'H')
+  assert.equal(hidden.world, 5)
+  assert.equal(hidden.enemyName, 'E-1 L-H 01')
+  const cleared = { ...selected, defeatedEnemies: ['2/0','2/1','2/2','2/3','2/4'] }
+  assert.throws(() => selectCampaignWorld(cleared, 3), /cleared/)
+})
+
+test('campaign guardian star is fixed across encounters and can be supplied to interactive duels', () => {
+  const state = createCampaign('C1', heroCode, undefined, { star: 2 })
+  const next = nextCampaignBattle(strong(state), seeded(14))
+  assert.equal(state.star, 2)
+  assert.equal(next.state.star, 2)
+  const duel = createBattle(next.state.hero, campaignEnemy(next.state), seeded(15), { star: next.state.star })
+  assert.equal(duel.snapshot().star, 2)
 })

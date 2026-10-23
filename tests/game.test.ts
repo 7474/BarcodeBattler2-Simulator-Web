@@ -151,6 +151,7 @@ test('fusion rejects matching suffixes, standalone item bases and C2 mismatches'
   assert.throws(() => combine(decodeBarcode('00000505'), fighter()), /First/)
   const other = fighter({ barcode: rightCode, race: 4, job: 4 })
   assert.doesNotThrow(() => combine(fighter(), other))
+  assert.throws(() => combine(fighter(), other, { mode: 'C1' }), /C1/)
   assert.throws(() => combine(fighter(), other, { mode: 'C2' }), /C2/)
   const info = decodeBarcode(card('050101095000'))
   assert.throws(() => combine(fighter(), info), /C1/)
@@ -162,7 +163,8 @@ test('battle deterministic fixture retains double application of the first-slot 
   const before = structuredClone([a, b])
   assert.deepEqual(battle(a, b, () => 0.5), {
     winner: 'left', rounds: 3, leftHp: 33700, rightHp: 0,
-    log: ['守護星 2', '1P 攻撃 19000', '2P 攻撃 15000', '1P 攻撃 19000'],
+    leftMp: 0, rightMp: 0, leftPp: 5, rightPp: 5,
+    log: ['守護星 2', '1P 攻撃 19000', '1P CRITICAL', '2P 攻撃 15000', '2P CRITICAL', '1P 攻撃 19000', '1P CRITICAL'],
   })
   assert.deepEqual([a, b], before)
 })
@@ -325,4 +327,37 @@ test('duel aliases delegate to the same interactive mechanics', () => {
   const session = createDuel(a, b, () => 0.5)
   const reference = createBattle(a, b, () => 0.5)
   assert.deepEqual(stepDuel(session, { type: 'attack', timing: 2 }), reference.act({ type: 'attack', timing: 2 }))
+})
+
+test('magician union MP is zero below the original ten-MP eligibility threshold', () => {
+  const a = fighter({ job: 7, mp: 9 })
+  const b = fighter({ barcode: rightCode, job: 7, mp: 9 })
+  assert.equal(combine(a, b).mp, 0)
+  assert.equal(combine(a, { ...b, mp: 10 }).mp, 9)
+  assert.equal(combine({ ...a, mp: 10 }, b).mp, 10)
+  assert.equal(combine({ ...a, job: 6, mp: 10 }, b).mp, 0)
+})
+
+test('race labels are neutral rather than unverified character lore', () => {
+  assert.match(decodeBarcode(leftCode).name, /^種族4/)
+})
+
+test('campaigns can retain a fixed guardian star without drawing another one', () => {
+  let calls = 0
+  const rng = () => { calls++; return 0.5 }
+  const a = fighter({ speed: 9 }), b = fighter({ speed: 0 })
+  const first = createBattle(a, b, rng, { star: 2 })
+  assert.equal(first.snapshot().star, 2)
+  assert.equal(first.snapshot().log[0], '守護星 3')
+  assert.equal(calls, 2, 'fixed star consumes only the two initiative rolls')
+  assert.equal(createBattle(a, b, () => 0.5).snapshot().star, 1)
+  assert.throws(() => createBattle(a, b, rng, { star: 3 } as never), /guardian star/)
+})
+
+test('critical labels do not apply another damage multiplier', () => {
+  const a = decodeBarcode(leftCode), b = decodeBarcode(rightCode)
+  const session = createBattle(a, b, () => 0.5)
+  const after = session.act({ type: 'attack' })
+  assert.equal(after.right.hp, 11500)
+  assert.ok(after.log.includes('1P CRITICAL'))
 })

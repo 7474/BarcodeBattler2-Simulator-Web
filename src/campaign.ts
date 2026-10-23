@@ -2,13 +2,15 @@
  * Campaign rules from finalfighter/BarcodeBattler2-Simulator (MIT):
  * C1WorldData.as, C2PassCode.as and barcode2.as.
  *
- * This is a single-active-hero adaptation: C1 automatically visits every enemy
- * in L1..L5 then LH instead of the original world/CPU enemy selection. C2 is
+ * C1 defaults to visiting every enemy
+ * in L1..L5 then LH; callers can select another uncleared world. Enemy selection
+ * is deterministic rather than the original random CPU selection. C2 is
  * open-ended scanned-card training, NOT an invented sequence of worlds.
- * Party switching, post-battle items and interactive magic are not implemented.
+ * The optional magician is a persistent reserve; a defeated active hero switches
+ * automatically. Post-battle items and campaign magic menus are not implemented.
  */
 import { combineFighters, createBattle, decodeBarcode } from './game.ts'
-import type { BattleResult, Fighter } from './game.ts'
+import type { BattleResult, BattleSnapshot, Fighter } from './game.ts'
 
 export interface Campaign {
   mode: 'C1' | 'C2'
@@ -16,6 +18,13 @@ export interface Campaign {
   stage: number
   hero: Fighter
   baseHero: Fighter
+  partner?: Fighter
+  basePartner?: Fighter
+  remainingEnemy?: Fighter
+  party: { warrior: Fighter; magician: Fighter | null }
+  activeHero: 'warrior' | 'magician'
+  defeatedEnemies: string[]
+  star: 0 | 1 | 2
   complete: boolean
   defeated: boolean
   enemyName: string
@@ -49,6 +58,19 @@ const dfGrowth = [0,0,0,0,0,1,1,2,3,4,5,6,7,8,9,11,12,14,16,18,20,22,24,26,28,31
 const clearLevels = [10,16,24,31,38,45]
 const trainingBarcode = '0401207336501'
 
+function syncParty(state: Campaign): Campaign {
+  const magician = state.hero.job > 6
+  return { ...state, activeHero: magician ? 'magician' : 'warrior',
+    party: { warrior: magician ? state.partner! : state.hero,
+      magician: magician ? state.hero : state.partner ?? null } }
+}
+
+const encounterId = (world: number, enemy: number) => `${world}/${enemy}`
+
+function firstEnemy(state: Campaign, world: number): number {
+  return [0,1,2,3,4].find(enemy => !state.defeatedEnemies.includes(encounterId(world, enemy))) ?? -1
+}
+
 function startingKeys(chapter: number, checksum: number): string[] {
   const offset = chapter === 0 ? 0 : chapter <= 2 ? 4 : chapter <= 4 ? 3 : 2
   return [...keySets[(offset - Math.floor(checksum / 2) + 5) % 5]]
@@ -61,36 +83,51 @@ function enemyName(state: Campaign): string {
 }
 
 export interface CampaignOptions {
-  /** Supplies the original two-hero checksum; this adaptation battles with one active hero. */
+  /** Persistent second hero and the original two-hero checksum. */
   magicianBarcode?: string
   enemyBarcode?: string
   password?: string
+  world?: number | 'H'
+  star?: 0 | 1 | 2
 }
 
 export function createCampaign(mode: 'C1' | 'C2', heroBarcode: string, supportBarcode?: string, options: CampaignOptions = {}): Campaign {
   if (mode !== 'C1' && mode !== 'C2') throw new Error('Invalid campaign mode')
   const hero = decodeBarcode(heroBarcode, { mode, hero: true })
   if (hero.kind !== 'fighter' || hero.hp <= 0) throw new Error('Campaign requires a living hero')
+  if (hero.job > 6) throw new Error('First party hero must be a warrior')
+  let partner: Fighter | undefined
   if (options.magicianBarcode !== undefined) {
-    const partner = decodeBarcode(options.magicianBarcode, { mode, hero: true, job: 'magician' })
+    partner = decodeBarcode(options.magicianBarcode, { mode, hero: true, job: 'magician' })
     if (partner.kind !== 'fighter' || partner.hp <= 0) throw new Error('Invalid partner hero')
+    if (hero.job > 6) throw new Error('First party hero must be a warrior')
   }
   const unionCheckdigit = (Number(heroBarcode.at(-1)) + Number(options.magicianBarcode?.at(-1) ?? 0)) % 10
+  const starRoll = options.star === undefined ? Math.floor(Math.random() * 500) : 0
+  const star = options.star ?? (starRoll < 110 ? 0 : starRoll < 256 ? 1 : 2)
+  if (![0,1,2].includes(star)) throw new Error('Invalid guardian star')
   const state: Campaign = {
     mode, stage: 0, hero: { ...hero, maxHp: hero.hp }, baseHero: { ...hero },
     complete: false, defeated: false, enemyName: '', chapter: 0, world: 0,
     enemy: 0, unionCheckdigit, keys: startingKeys(0, unionCheckdigit),
     enemyBarcode: trainingBarcode,
+    partner: partner ? { ...partner, maxHp: partner.hp } : undefined,
+    basePartner: partner ? { ...partner } : undefined,
+    party: { warrior: hero, magician: partner ?? null }, activeHero: 'warrior',
+    defeatedEnemies: [],
+    star,
   }
   state.enemyName = enemyName(state)
   let next = options.password ? useCampaignPassword(state, options.password) : state
   if (supportBarcode) next = { ...next, hero: combineFighters(next.hero, decodeBarcode(supportBarcode, { mode, hero: false }), { mode }) }
   if (options.enemyBarcode) next = setCampaignEnemy(next, options.enemyBarcode)
-  return next
+  if (options.world !== undefined) next = selectCampaignWorld(next, options.world)
+  return syncParty(next)
 }
 
 export function campaignEnemy(state: Campaign): Fighter {
   if (state.complete || state.defeated) throw new Error('Campaign is finished')
+  if (state.remainingEnemy) return { ...state.remainingEnemy }
   if (state.mode === 'C2') {
     return { ...decodeBarcode(state.enemyBarcode, { mode: 'C2', hero: false }), name: state.enemyName }
   }
@@ -113,7 +150,37 @@ export function setCampaignEnemy(state: Campaign, barcode: string): Campaign {
   if (state.complete || state.defeated) throw new Error('Campaign is finished')
   const enemy = decodeBarcode(barcode, { mode: 'C2', hero: false })
   if (enemy.kind !== 'fighter' || enemy.hp <= 0) throw new Error('Enemy must be a living fighter')
-  const next = { ...state, enemyBarcode: barcode }
+  const next = { ...state, enemyBarcode: barcode, remainingEnemy: undefined }
+  return { ...next, enemyName: enemyName(next) }
+}
+
+/** Swap the living active hero and reserve without restoring their resources. */
+export function switchCampaignHero(state: Campaign): Campaign {
+  if (state.complete || state.defeated) throw new Error('Campaign is finished')
+  if (!state.partner || state.partner.hp <= 0) throw new Error('No living reserve hero')
+  return syncParty({ ...state, hero: { ...state.partner }, partner: { ...state.hero },
+    baseHero: { ...state.basePartner! }, basePartner: { ...state.baseHero } })
+}
+
+export const selectCampaignEnemy = setCampaignEnemy
+
+export function selectCampaignHero(state: Campaign, role: 'warrior' | 'magician'): Campaign {
+  if (role !== 'warrior' && role !== 'magician') throw new Error('Invalid hero role')
+  if (state.complete || state.defeated) throw new Error('Campaign is finished')
+  return (state.hero.job > 6) === (role === 'magician') ? state : switchCampaignHero(state)
+}
+
+/** Original L1..L5 selection, with LH available only after obtaining all keys. */
+export function selectCampaignWorld(state: Campaign, world: number | 'H'): Campaign {
+  if (state.mode !== 'C1') throw new Error('World selection requires C1')
+  if (state.complete || state.defeated) throw new Error('Campaign is finished')
+  const index = world === 'H' ? 5 : world - 1
+  if (!Number.isInteger(index) || index < 0 || index > 5) throw new Error('Invalid world')
+  if (index === 5 && state.keys.length) throw new Error('LH requires three keys')
+  if (state.remainingEnemy && index !== state.world) throw new Error('Finish the current enemy before changing worlds')
+  const enemy = firstEnemy(state, index)
+  if (enemy < 0) throw new Error('World is cleared')
+  const next = { ...state, world: index, enemy }
   return { ...next, enemyName: enemyName(next) }
 }
 
@@ -164,21 +231,33 @@ function passwordHero(base: Fighter, level: number): Fighter {
 }
 
 export function nextCampaignBattle(state: Campaign, rng: () => number = Math.random): { state: Campaign; result: BattleResult } {
-  const enemy = campaignEnemy(state)
-  const session = createBattle(state.hero, enemy, rng)
+  const session = createBattle(state.hero, campaignEnemy(state), rng, { star: state.star })
   let snapshot = session.snapshot()
   while (!snapshot.result) snapshot = session.auto()
-  const result = snapshot.result
+  return { state: finishCampaignBattle(state, snapshot.result, snapshot), result: snapshot.result }
+}
+
+/** Complete an interactive duel without replaying it. */
+export function finishCampaignBattle(state: Campaign, snapshot: BattleSnapshot): Campaign
+export function finishCampaignBattle(state: Campaign, result: BattleResult, snapshot?: Pick<BattleSnapshot, 'left' | 'right'>): Campaign
+export function finishCampaignBattle(state: Campaign, outcome: BattleResult | BattleSnapshot, finalSnapshot?: Pick<BattleSnapshot, 'left' | 'right'>): Campaign {
+  const result = 'result' in outcome ? outcome.result : outcome
+  if (!result) throw new Error('Battle has not finished')
+  const snapshot = 'result' in outcome ? outcome : finalSnapshot
+  const enemy = campaignEnemy(state)
   const next: Campaign = { ...state, hero: { ...state.hero, hp: result.leftHp,
-    mp: snapshot.left.mp, pp: snapshot.left.pp }, keys: [...state.keys] }
+    mp: snapshot?.left.mp ?? result.leftMp, pp: snapshot?.left.pp ?? result.leftPp }, keys: [...state.keys] }
   if (result.winner !== 'left' || result.leftHp <= 0) {
+    next.remainingEnemy = { ...enemy, hp: result.rightHp, mp: snapshot?.right.mp ?? result.rightMp, pp: snapshot?.right.pp ?? result.rightPp }
+    if (next.partner && next.partner.hp > 0) return switchCampaignHero(next)
     next.defeated = true
-    return { state: next, result }
+    return syncParty(next)
   }
+  next.remainingEnemy = undefined
   next.stage++
   if (state.mode === 'C2') {
     next.hero = c2Reward(next.hero, enemy.special)
-    return { state: next, result }
+    return syncParty(next)
   }
   const table = c1[state.chapter]
   const pointer = (table[4][state.unionCheckdigit] + state.world) % 5
@@ -198,6 +277,13 @@ export function nextCampaignBattle(state: Campaign, rng: () => number = Math.ran
     if (next.hero.job > 6) next.hero.mp += 5
   }
   next.hero = capHero(next.hero)
+  next.defeatedEnemies = [...state.defeatedEnemies, encounterId(state.world, state.enemy)]
+  if (state.enemy === 4) {
+    for (let enemy = 0; enemy < 4; enemy++) {
+      const id = encounterId(state.world, enemy)
+      if (!next.defeatedEnemies.includes(id)) next.defeatedEnemies.push(id)
+    }
+  }
   if (state.world === 5 && state.enemy === 4) {
     if (state.chapter >= 3) next.complete = true
     else {
@@ -205,15 +291,17 @@ export function nextCampaignBattle(state: Campaign, rng: () => number = Math.ran
       next.world = 0
       next.enemy = 0
       next.keys = startingKeys(next.chapter, next.unionCheckdigit)
+      next.defeatedEnemies = []
       next.hero = passwordHero(next.baseHero, clearLevels[state.chapter])
+      if (next.basePartner) next.partner = passwordHero(next.basePartner, clearLevels[state.chapter])
     }
   } else if (state.enemy === 4) {
-    next.world++
-    next.enemy = 0
+    next.world = [0,1,2,3,4,5].find(world => firstEnemy(next, world) >= 0) ?? 5
+    next.enemy = firstEnemy(next, next.world)
     if (next.world === 5 && next.keys.length) throw new Error('LH requires three keys')
-  } else next.enemy++
+  } else next.enemy = firstEnemy(next, next.world)
   next.enemyName = next.complete ? 'CLEAR' : enemyName(next)
-  return { state: next, result }
+  return syncParty(next)
 }
 
 /** Original 5-digit C2 password, bound to the selected heroes' checksums. */
@@ -237,19 +325,26 @@ export function useCampaignPassword(state: Campaign, password: string): Campaign
       const [hpRate,hpBonus,stRate,stBonus,dfRate,dfBonus] = powerup
       const base = state.baseHero
       const hp = (Math.floor(base.hp / 100 * hpRate) + hpBonus) * 100
-      return { ...state, hero: { ...base, hp, maxHp: hp,
+      const next = { ...state, hero: { ...base, hp, maxHp: hp,
         attack: (Math.floor(base.attack / 100 * stRate / 9) + stBonus) * 100,
         defense: (Math.floor(base.defense / 100 * dfRate / 12) + dfBonus) * 100 } }
+      if (state.basePartner) {
+        const partnerState = useCampaignPassword({ ...state, baseHero: state.basePartner, basePartner: undefined }, password)
+        next.partner = partnerState.hero
+      }
+      return syncParty(next)
     }
     const chapter = password === `31${(state.unionCheckdigit + 1) % 10}` ? 4
       : password === `38${state.unionCheckdigit}` ? 5 : -1
     if (chapter < 0) throw new Error('Unsupported C1 password')
     const next = { ...state, chapter, hero: passwordHero(state.baseHero, clearLevels[chapter - 1]),
+      partner: state.basePartner ? passwordHero(state.basePartner, clearLevels[chapter - 1]) : undefined,
       keys: startingKeys(chapter, state.unionCheckdigit) }
-    return { ...next, enemyName: enemyName(next) }
+    return syncParty({ ...next, enemyName: enemyName(next) })
   }
   if (!/^\d{5}$/.test(password)) throw new Error('Invalid C2 password')
   const level = Number(password[0]) * 10 + Number(password[2])
   if (campaignPassword(state, level) !== password) throw new Error('Invalid C2 password')
-  return { ...state, hero: passwordHero(state.baseHero, level) }
+  return syncParty({ ...state, hero: passwordHero(state.baseHero, level),
+    partner: state.basePartner ? passwordHero(state.basePartner, level) : undefined })
 }

@@ -43,7 +43,7 @@ export interface DecodeOptions {
   rng?: () => number
 }
 
-const races = ['人間', '獣人', '機械', '妖精', '魔族']
+const races = ['種族0', '種族1', '種族2', '種族3', '種族4']
 const randomInt = (rng: () => number, n: number) => {
   const value = rng()
   if (!Number.isFinite(value) || value < 0 || value >= 1) throw new Error('RNG must return a number in [0, 1)')
@@ -165,7 +165,7 @@ export function decodeBarcode(barcode: string, options: DecodeOptions = {}): Fig
 export function combineFighters(first: Fighter, second: Fighter, options: { mode?: 'C0' | 'C1' | 'C2' } = {}): Fighter {
   if (first.kind !== 'fighter' || first.race > 4) throw new Error('First card must be a fighter')
   if (first.barcode.slice(-7) === second.barcode.slice(-7)) throw new Error('Cannot combine identical card suffixes')
-  if (options.mode === 'C2' && second.race <= 4 && (first.race !== second.race || first.job !== second.job)) throw new Error('C2 fusion requires the same race and job')
+  if ((options.mode === 'C1' || options.mode === 'C2') && second.race <= 4 && (first.race !== second.race || first.job !== second.job)) throw new Error(`${options.mode} fusion requires the same race and job`)
   if (second.race === 9 && (second.job === 5 || second.job === 6) && options.mode !== 'C1') throw new Error('Information cards require C1 mode')
   if (second.race === 9 && second.job >= 8 && first.job <= 6) throw new Error('Warriors cannot use MP items')
   // Deliberately tests the SECOND card's job, as BarcodeRead does.
@@ -180,7 +180,7 @@ export function combineFighters(first: Fighter, second: Fighter, options: { mode
     attack1: first.attack, attack2: second.attack,
     defense1: first.defense, defense2: second.defense,
     pp: Math.min(99, first.pp + (union ? 0 : second.pp)),
-    mp: Math.min(99, first.job <= 6 ? 0 : first.mp + (union ? 0 : second.mp)),
+    mp: Math.min(99, first.job <= 6 ? 0 : union ? first.mp >= 10 || second.mp >= 10 ? first.mp : 0 : first.mp + second.mp),
     race2: second.race, special2: second.special, union,
   }
 }
@@ -262,7 +262,17 @@ function debuff(source: State, target: State) {
   }
 }
 
-export interface BattleResult { winner: 'left' | 'right'; rounds: number; log: string[]; leftHp: number; rightHp: number }
+export interface BattleResult {
+  winner: 'left' | 'right'
+  rounds: number
+  log: string[]
+  leftHp: number
+  rightHp: number
+  leftMp: number
+  rightMp: number
+  leftPp: number
+  rightPp: number
+}
 export type BattleAction =
   | { type: 'attack'; timing?: 1 | 2 }
   | { type: 'power'; timing?: 10 | 14 }
@@ -276,7 +286,10 @@ export interface BattleSnapshot {
   log: string[]
   herbsBlocked: { left: boolean; right: boolean }
   result: BattleResult | null
+  /** Original guardian-star index, retained across encounters by campaigns. */
+  star: 0 | 1 | 2
 }
+export interface BattleOptions { star?: 0 | 1 | 2 }
 export interface BattleSession {
   snapshot(): BattleSnapshot
   act(action: BattleAction): BattleSnapshot
@@ -285,10 +298,12 @@ export interface BattleSession {
 export const MAGIC_COSTS: readonly number[] = Object.freeze([0, 2, 5, 2, 4, 3, 5, 4, 6, 3])
 
 /** Stateful local duel. Invalid actions do not consume a turn or resources. */
-export function createBattle(left: Fighter, right: Fighter, rng: () => number = Math.random): BattleSession {
+export function createBattle(left: Fighter, right: Fighter, rng: () => number = Math.random, options: BattleOptions = {}): BattleSession {
   const fighters = [state(left), state(right)]
   const log: string[] = []
-  const starRoll = randomInt(rng, 500), star = starRoll < 110 ? 0 : starRoll < 256 ? 1 : 2
+  if (options.star !== undefined && ![0, 1, 2].includes(options.star)) throw new Error('Invalid guardian star')
+  const starRoll = options.star === undefined ? randomInt(rng, 500) : 0
+  const star = options.star ?? (starRoll < 110 ? 0 : starRoll < 256 ? 1 : 2)
   log.push(`守護星 ${star + 1}`)
   const cancel = fighters.map(f => has(f, 45))
   if (cancel[0]) fighters[1].specials = [0, 0]
@@ -353,7 +368,10 @@ export function createBattle(left: Fighter, right: Fighter, rng: () => number = 
     if (!finished()) return null
     const winner = fighters[0].hp <= 0 ? 'right' : fighters[1].hp <= 0 ? 'left' :
       fighters[0].hp / Math.max(1, fighters[0].max) >= fighters[1].hp / Math.max(1, fighters[1].max) ? 'left' : 'right'
-    return { winner, rounds, log: [...log], leftHp: fighters[0].hp * 100, rightHp: fighters[1].hp * 100 }
+    return {
+      winner, rounds, log: [...log], leftHp: fighters[0].hp * 100, rightHp: fighters[1].hp * 100,
+      leftMp: fighters[0].mp, rightMp: fighters[1].mp, leftPp: fighters[0].pp, rightPp: fighters[1].pp,
+    }
   }
   const exportFighter = (f: State): Fighter => ({
     barcode: f.barcode, name: f.name, kind: f.kind, reading: f.reading,
@@ -365,7 +383,7 @@ export function createBattle(left: Fighter, right: Fighter, rng: () => number = 
   const snapshot = (): BattleSnapshot => ({
     left: exportFighter(fighters[0]), right: exportFighter(fighters[1]),
     turn: turn === 0 ? 'left' : 'right', rounds, log: [...log],
-    herbsBlocked: { left: fighters[0].herbsBlocked, right: fighters[1].herbsBlocked }, result: result(),
+    herbsBlocked: { left: fighters[0].herbsBlocked, right: fighters[1].herbsBlocked }, result: result(), star,
   })
   const act = (action: BattleAction, automatic = false): BattleSnapshot => {
     if (finished()) throw new Error('Battle has ended')
@@ -416,6 +434,7 @@ export function createBattle(left: Fighter, right: Fighter, rng: () => number = 
         const amount = damage(a, b, magicRate, action.timing)
         b.hp = Math.max(0, b.hp - amount)
         log.push(`${turn + 1}P 攻撃 ${amount * 100}`)
+        if (amount > a.st + Math.floor(a.st / 2)) log.push(`${turn + 1}P CRITICAL`)
         if (amount > 0 && b.hp > 0) {
           if (a.race2 === 5 && !a.weaponBroken) { a.st -= a.st2; a.weaponBroken = true; log.push(`${turn + 1}P 武器破損`) }
           if (b.race2 === 7 && !b.armorBroken) { b.df -= b.df2; b.armorBroken = true; log.push(`${2 - turn}P 防具破損`) }
@@ -442,8 +461,8 @@ export function createBattle(left: Fighter, right: Fighter, rng: () => number = 
 }
 
 /** Rounds count individual alternating actions, not pairs of turns. */
-export function battle(left: Fighter, right: Fighter, rng: () => number = Math.random): BattleResult {
-  const session = createBattle(left, right, rng)
+export function battle(left: Fighter, right: Fighter, rng: () => number = Math.random, options: BattleOptions = {}): BattleResult {
+  const session = createBattle(left, right, rng, options)
   let result = session.snapshot().result
   while (!result) result = session.auto().result
   return result
