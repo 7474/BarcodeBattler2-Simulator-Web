@@ -3,6 +3,13 @@
   "name": "barcode-battler-web",
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-23",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "bb2.koudenpa.net",
+      "custom_domain": true
+    }
+  ],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

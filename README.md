@@ -51,6 +51,17 @@ npm run deploy
 CloudflareアカウントでD1/R2を有効にする必要があります。
 認証情報や`.dev.vars`はコミットしないでください。
 
+### GitHub ActionsでのCI/CD
+
+`main`へのPull Requestではテスト・型チェック・ビルドを実行し、
+`main`へのpushでは成功後にCloudflare Workersへデプロイします。
+GitHubリポジトリの **Settings → Secrets and variables → Actions** に
+`CLOUDFLARE_API_TOKEN`（Cloudflare APIトークン）と
+`CLOUDFLARE_ACCOUNT_ID`（CloudflareアカウントID）をSecretsとして登録してください。
+デプロイ前にCloudflareでD1・R2を作成し、`wrangler.jsonc`のD1 `database_id`を設定、
+D1マイグレーションを適用してください。`bb2.koudenpa.net`のゾーンも
+Cloudflareアカウントに追加しておく必要があります。
+
 ## 遊び方・対戦部屋
 
 - カメラまたは手入力でJAN/EANの8桁・13桁を読み取ります。チェックデジットを検証します。
