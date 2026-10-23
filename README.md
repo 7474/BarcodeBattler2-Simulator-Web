@@ -37,18 +37,18 @@ R2には商品サムネイルを保存します。
 
 ```sh
 npx wrangler login
-npx wrangler d1 create barcode-battler
-npx wrangler r2 bucket create barcode-battler-images
 ```
 
-作成結果のD1 `database_id`を`wrangler.jsonc`に設定してから実行します。
+Wranglerがデプロイ時にD1データベースとR2バケットを自動作成します。
+初回デプロイ後にD1マイグレーションを適用します。
 
 ```sh
-npm run db:remote
 npm run deploy
+npm run db:remote
 ```
 
-CloudflareアカウントでD1/R2を有効にする必要があります。
+CloudflareアカウントでD1/R2を有効にする必要があります。デプロイ先の
+`bb2.koudenpa.net`ゾーンをCloudflareアカウントに追加しておいてください。
 認証情報や`.dev.vars`はコミットしないでください。
 
 ### GitHub ActionsでのCI/CD
@@ -58,9 +58,8 @@ CloudflareアカウントでD1/R2を有効にする必要があります。
 GitHubリポジトリの **Settings → Secrets and variables → Actions** に
 `CLOUDFLARE_API_TOKEN`（Cloudflare APIトークン）と
 `CLOUDFLARE_ACCOUNT_ID`（CloudflareアカウントID）をSecretsとして登録してください。
-デプロイ前にCloudflareでD1・R2を作成し、`wrangler.jsonc`のD1 `database_id`を設定、
-D1マイグレーションを適用してください。`bb2.koudenpa.net`のゾーンも
-Cloudflareアカウントに追加しておく必要があります。
+`main`へのデプロイでD1・R2を自動作成し、D1マイグレーションを適用します。
+`bb2.koudenpa.net`のゾーンはCloudflareアカウントに追加しておく必要があります。
 
 ## 遊び方・対戦部屋
 
