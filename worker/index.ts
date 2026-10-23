@@ -1,5 +1,5 @@
 import { battle as simulateBattle, decodeBarcode, validateBarcode } from '../src/game.ts'
-import { amazonAffiliateEnabled, searchAmazonProduct, type AmazonEnv } from './amazon.ts'
+import { amazonAffiliateEnabled, amazonApiEnabled, amazonSearchLinks, AMAZON_ASSOCIATE_TAG, searchAmazonProduct, type AmazonEnv } from './amazon.ts'
 
 interface Env extends AmazonEnv {
   DB: D1Database
@@ -213,7 +213,7 @@ function publicRoom(room: Room, owner: string | null, env: Env) {
         source: room.champion_product_source ?? 'openfoodfacts',
         asin: room.champion_product_asin ?? null,
         thumbnail_url: room.champion_thumbnail_url ?? null,
-      }, env),
+      }),
     } : null,
     updatedAt: room.updated_at,
   }
@@ -225,20 +225,21 @@ async function getRoom(env: Env, id: string): Promise<Room> {
   return room
 }
 
-function productValue(row: ProductRow | null, env: Env) {
-  if (!row) return null
-  const amazon = row.source === 'amazon' && amazonAffiliateEnabled(env) && row.asin
-  const thumbnail = row.source === 'amazon' ? row.thumbnail_url :
-    row.has_thumbnail ? `/api/images/${row.barcode}` : null
-  if (!row.name && !thumbnail && !amazon) return null
+function productValue(row: ProductRow | null, code = row?.barcode) {
+  if (!code) return null
+  const amazon = row?.source === 'amazon' && row.asin
+  const thumbnail = row?.source === 'amazon' ? row.thumbnail_url :
+    row?.has_thumbnail ? `/api/images/${code}` : null
+  const searchLinks = amazonSearchLinks(code)
   return {
-    name: row.name,
+    name: row?.name ?? null,
     thumbnail,
-    amazonAsin: amazon ? row.asin : null,
+    amazonAsin: amazon ? row!.asin : null,
+    amazonLinkType: amazon ? 'product' as const : 'search' as const,
     amazonAffiliateUrl: amazon
-      ? `https://www.amazon.co.jp/dp/${row.asin}?tag=${encodeURIComponent(env.AMAZON_ASSOCIATE_TAG!)}`
-      : null,
-    amazonStandardUrl: amazon ? `https://www.amazon.co.jp/dp/${row.asin}` : null,
+      ? `https://www.amazon.co.jp/dp/${row!.asin}?tag=${encodeURIComponent(AMAZON_ASSOCIATE_TAG)}`
+      : searchLinks.affiliateUrl,
+    amazonStandardUrl: amazon ? `https://www.amazon.co.jp/dp/${row!.asin}` : searchLinks.standardUrl,
   }
 }
 
@@ -272,11 +273,11 @@ function imageType(bytes: Uint8Array): string | null {
 async function lookupProduct(env: Env, code: string) {
   const cached = await env.DB.prepare('SELECT * FROM products WHERE barcode = ?').bind(code).first<ProductRow>()
   const timestamp = now()
-  const amazonEnabled = amazonAffiliateEnabled(env)
+  const amazonEnabled = amazonApiEnabled(env)
   const openFoodFactsCache = cached?.source === 'amazon' ? null : cached
   if (cached && (cached.source !== 'amazon' || amazonEnabled) &&
     timestamp - cached.checked_at < (cached.source === 'amazon' ? 86400 : cached.name ? 7 * 86400 : 3600)) {
-    if (!amazonEnabled || cached.source === 'amazon') return productValue(cached, env)
+    if (!amazonEnabled || cached.source === 'amazon') return productValue(cached)
   }
   if (amazonEnabled) {
     try {
@@ -296,14 +297,14 @@ async function lookupProduct(env: Env, code: string) {
           'ON CONFLICT(barcode) DO UPDATE SET name = excluded.name, has_thumbnail = excluded.has_thumbnail, ' +
           'checked_at = excluded.checked_at, source = excluded.source, asin = excluded.asin, thumbnail_url = excluded.thumbnail_url',
         ).bind(code, product.name, product.has_thumbnail, product.checked_at, product.source, product.asin, product.thumbnail_url).run()
-        return productValue(product, env)
+        return productValue(product)
       }
     } catch {
       // Amazon failures fall through to the existing product source.
     }
   }
   if (openFoodFactsCache && timestamp - openFoodFactsCache.checked_at <
-    (openFoodFactsCache.name ? 7 * 86400 : 3600)) return productValue(openFoodFactsCache, env)
+    (openFoodFactsCache.name ? 7 * 86400 : 3600)) return productValue(openFoodFactsCache)
 
   let name = openFoodFactsCache?.name ?? null
   let hasThumbnail = openFoodFactsCache?.has_thumbnail ?? 0
@@ -347,7 +348,7 @@ async function lookupProduct(env: Env, code: string) {
   return productValue({
     barcode: code, name, has_thumbnail: hasThumbnail, checked_at: now(),
     source: 'openfoodfacts', asin: null, thumbnail_url: null,
-  }, env)
+  })
 }
 
 async function challenge(request: Request, env: Env, roomId: string): Promise<Response> {
@@ -424,7 +425,7 @@ async function api(request: Request, env: Env): Promise<Response> {
     return initializeSession(request, env)
   }
   if (request.method === 'GET' && path === '/api/config') {
-    return json({ amazonAffiliateEnabled: amazonAffiliateEnabled(env) })
+    return json({ amazonAffiliateEnabled: amazonAffiliateEnabled() })
   }
   if (request.method === 'GET' && path === '/api/rooms') {
     const owner = await session(request, env)
@@ -459,7 +460,7 @@ async function api(request: Request, env: Env): Promise<Response> {
     await rateLimitProductIp(request, env, owner)
     return json({
       product: await lookupProduct(env, code),
-      amazonAffiliateEnabled: amazonAffiliateEnabled(env),
+      amazonAffiliateEnabled: amazonAffiliateEnabled(),
     }, 200, extra)
   }
   const imageMatch = /^\/api\/images\/(\d+)$/.exec(path)

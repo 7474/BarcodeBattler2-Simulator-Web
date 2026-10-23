@@ -1,27 +1,44 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { AMAZON_SEARCH_ENDPOINT, amazonAffiliateEnabled, amazonProductFromResponse, createAmazonSearchRequest, searchAmazonProduct } from '../worker/amazon.ts'
+import {
+  AMAZON_ASSOCIATE_TAG,
+  AMAZON_SEARCH_ENDPOINT,
+  amazonAffiliateEnabled,
+  amazonApiEnabled,
+  amazonProductFromResponse,
+  amazonSearchLinks,
+  createAmazonSearchRequest,
+  searchAmazonProduct,
+} from '../worker/amazon.ts'
 
 const env = {
   AMAZON_CLIENT_ID: 'client-id',
   AMAZON_CLIENT_SECRET: 'client-secret',
-  AMAZON_ASSOCIATE_TAG: 'example-22',
 }
 
-test('Amazon affiliate lookup requires a tag and both Creators API credentials', () => {
-  assert.equal(amazonAffiliateEnabled(env), true)
-  assert.equal(amazonAffiliateEnabled({ ...env, AMAZON_ASSOCIATE_TAG: 'invalid tag' }), false)
-  assert.equal(amazonAffiliateEnabled({ ...env, AMAZON_CLIENT_SECRET: undefined }), false)
+test('Amazon barcode affiliate links use the configured tracking ID without API credentials', () => {
+  assert.equal(AMAZON_ASSOCIATE_TAG, 'koudenpa0a-22')
+  assert.equal(amazonAffiliateEnabled(), true)
+  assert.equal(amazonApiEnabled({}), false)
+  assert.deepEqual(amazonSearchLinks('4901234567894'), {
+    affiliateUrl: 'https://www.amazon.co.jp/s?k=4901234567894&tag=koudenpa0a-22',
+    standardUrl: 'https://www.amazon.co.jp/s?k=4901234567894',
+  })
+  assert.deepEqual(amazonSearchLinks('978-4-00-000000-0'), {
+    affiliateUrl: 'https://www.amazon.co.jp/s?k=978-4-00-000000-0&tag=koudenpa0a-22',
+    standardUrl: 'https://www.amazon.co.jp/s?k=978-4-00-000000-0',
+  })
+  assert.equal(amazonApiEnabled(env), true)
 })
 
 test('Creators API search request targets Japan with bearer auth and barcode query', () => {
-  const init = createAmazonSearchRequest('test-token', '4901234567894', env.AMAZON_ASSOCIATE_TAG)
+  const init = createAmazonSearchRequest('test-token', '4901234567894', AMAZON_ASSOCIATE_TAG)
   const headers = new Headers(init.headers)
   const payload = JSON.parse(String(init.body))
   assert.equal(AMAZON_SEARCH_ENDPOINT, 'https://creatorsapi.amazon/catalog/v1/searchItems')
   assert.equal(init.method, 'POST')
   assert.equal(payload.marketplace, 'www.amazon.co.jp')
-  assert.equal(payload.partnerTag, env.AMAZON_ASSOCIATE_TAG)
+  assert.equal(payload.partnerTag, AMAZON_ASSOCIATE_TAG)
   assert.equal(payload.keywords, '4901234567894')
   assert.ok(payload.resources.includes('itemInfo.externalIds'))
   assert.equal(headers.get('authorization'), ['Bearer', 'test-token'].join(' '))

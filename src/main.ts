@@ -8,6 +8,7 @@ type Product = {
   thumbnail: string | null
   amazonAffiliateUrl?: string | null
   amazonStandardUrl?: string | null
+  amazonLinkType?: 'product' | 'search'
 }
 type Room = { id: string; name: string; barcodePrefix: string | null; champion: { barcode: string; wins: number; isOwner?: boolean; product?: Product | null } | null }
 
@@ -105,13 +106,15 @@ function appendAmazonLinks(parent: HTMLElement, product: Product | null | undefi
   if (!product?.amazonAffiliateUrl || !product.amazonStandardUrl) return
   const links = document.createElement('div')
   links.className = 'product-links'
+  const isSearch = product.amazonLinkType === 'search'
   for (const [href, label, affiliate] of [
-    [product.amazonAffiliateUrl, 'Amazonで購入（アフィリエイト）', true],
-    [product.amazonStandardUrl, 'Amazon商品ページ（アフィリエイトなし）', false],
+    [product.amazonAffiliateUrl, isSearch ? 'Amazonでバーコード検索（アフィリエイト）' : 'Amazonで購入（アフィリエイト）', true],
+    [product.amazonStandardUrl, isSearch ? 'Amazonでバーコード検索（アフィリエイトなし）' : 'Amazon商品ページ（アフィリエイトなし）', false],
   ] as const) {
     try {
       const url = new URL(href)
-      if (url.protocol !== 'https:' || url.hostname !== 'www.amazon.co.jp' || !/^\/dp\/[A-Z0-9]{10}$/.test(url.pathname)) continue
+      if (url.protocol !== 'https:' || url.hostname !== 'www.amazon.co.jp' ||
+        (!/^\/dp\/[A-Z0-9]{10}$/.test(url.pathname) && url.pathname !== '/s')) continue
       const link = document.createElement('a')
       link.href = url.href
       link.textContent = label

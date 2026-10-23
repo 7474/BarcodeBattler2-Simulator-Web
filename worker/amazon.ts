@@ -1,4 +1,5 @@
 export const AMAZON_SEARCH_ENDPOINT = 'https://creatorsapi.amazon/catalog/v1/searchItems'
+export const AMAZON_ASSOCIATE_TAG = 'koudenpa0a-22'
 const tokenEndpoint = 'https://api.amazon.co.jp/auth/o2/token'
 const marketplace = 'www.amazon.co.jp'
 const imageHosts = new Set([
@@ -11,7 +12,6 @@ const imageHosts = new Set([
 export interface AmazonEnv {
   AMAZON_CLIENT_ID?: string
   AMAZON_CLIENT_SECRET?: string
-  AMAZON_ASSOCIATE_TAG?: string
 }
 
 export interface AmazonProduct {
@@ -54,9 +54,20 @@ async function readJson(response: Response, max: number): Promise<unknown> {
   return JSON.parse(new TextDecoder().decode(bytes))
 }
 
-export function amazonAffiliateEnabled(env: AmazonEnv): boolean {
-  return !!env.AMAZON_CLIENT_ID && !!env.AMAZON_CLIENT_SECRET &&
-    !!env.AMAZON_ASSOCIATE_TAG && /^[A-Za-z0-9_-]{1,64}$/.test(env.AMAZON_ASSOCIATE_TAG)
+export function amazonAffiliateEnabled(): boolean {
+  return true
+}
+
+export function amazonApiEnabled(env: AmazonEnv): boolean {
+  return !!env.AMAZON_CLIENT_ID && !!env.AMAZON_CLIENT_SECRET
+}
+
+export function amazonSearchLinks(barcode: string) {
+  const searchUrl = `https://www.amazon.co.jp/s?k=${encodeURIComponent(barcode)}`
+  return {
+    affiliateUrl: `${searchUrl}&tag=${AMAZON_ASSOCIATE_TAG}`,
+    standardUrl: searchUrl,
+  }
 }
 
 export function createAmazonSearchRequest(accessToken: string, barcode: string, partnerTag: string): RequestInit {
@@ -135,7 +146,7 @@ export function amazonProductFromResponse(value: unknown, barcode: string): Amaz
 }
 
 async function accessToken(env: AmazonEnv): Promise<string> {
-  if (!amazonAffiliateEnabled(env)) throw new Error('Amazon Creators API is not configured.')
+  if (!amazonApiEnabled(env)) throw new Error('Amazon Creators API is not configured.')
   const currentToken = cachedToken
   if (currentToken && currentToken.clientId === env.AMAZON_CLIENT_ID && currentToken.expiresAt > Date.now()) {
     return currentToken.value
@@ -176,7 +187,7 @@ export async function searchAmazonProduct(env: AmazonEnv, barcode: string): Prom
   const timer = setTimeout(() => controller.abort(), 3500)
   try {
     const response = await fetch(AMAZON_SEARCH_ENDPOINT, {
-      ...createAmazonSearchRequest(token, barcode, env.AMAZON_ASSOCIATE_TAG!),
+      ...createAmazonSearchRequest(token, barcode, AMAZON_ASSOCIATE_TAG),
       redirect: 'error',
       signal: controller.signal,
     })
