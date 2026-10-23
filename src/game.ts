@@ -168,8 +168,10 @@ export function combineFighters(first: Fighter, second: Fighter, options: { mode
   if ((options.mode === 'C1' || options.mode === 'C2') && second.race <= 4 && (first.race !== second.race || first.job !== second.job)) throw new Error(`${options.mode} fusion requires the same race and job`)
   if (second.race === 9 && (second.job === 5 || second.job === 6) && options.mode !== 'C1') throw new Error('Information cards require C1 mode')
   if (second.race === 9 && second.job >= 8 && first.job <= 6) throw new Error('Warriors cannot use MP items')
-  // Deliberately tests the SECOND card's job, as BarcodeRead does.
-  if (second.job >= 7 && second.race >= 5 && second.race <= 8) throw new Error('Incompatible equipment')
+  // BarcodeRead's comment says magicians cannot equip weapons or armour, but its
+  // code tests the second card's job, which is never >= 7 for those items. Apply
+  // the documented rule to the magician (first card) instead.
+  if (first.job >= 7 && second.race >= 5 && second.race <= 8) throw new Error('Incompatible equipment')
   const union = second.race <= 4
   return {
     ...first, name: `${first.name} + ${second.name}`,

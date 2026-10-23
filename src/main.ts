@@ -10,7 +10,8 @@ type Product = {
   amazonStandardUrl?: string | null
   amazonLinkType?: 'product' | 'search'
 }
-type Room = { id: string; name: string; barcodePrefix: string | null; champion: { barcode: string; wins: number; isOwner?: boolean; product?: Product | null } | null }
+type Room = { id: string; name: string; barcodePrefix: string | null; champion: { barcode: string; fighter?: Fighter; wins: number; isOwner?: boolean; product?: Product | null } | null }
+type RoomFight = { roomId: string; challenger: Fighter; champion: Fighter | null; winner: Side }
 type Side = 'left' | 'right'
 type Mode = 'C0' | 'C1' | 'C2'
 type Indicator = 'battle' | 'card' | 'escape' | 'critical' | 'power' | 'miss' | 'damage'
@@ -87,6 +88,11 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <i class="vent vent-r" aria-hidden="true"></i>
         </div>
         <p id="status" class="message" role="status">カードを読み込んでください</p>
+        <div id="room-bar" class="room-bar" hidden>
+          <button id="room-prev" type="button" aria-label="前の部屋">◀</button>
+          <div class="room-now"><b id="room-name">部屋を読み込み中…</b><span id="room-info"></span></div>
+          <button id="room-next" type="button" aria-label="次の部屋">▶</button>
+        </div>
         <div class="leds" id="leds" aria-hidden="true">
           <span class="led"></span><span class="led"></span><span class="led"></span><span class="led"></span><span class="led"></span>
         </div>
@@ -99,7 +105,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </div>
     <div class="keys">
       <button id="key-onoff" class="key" type="button"><span class="key-label">ON/OFF</span><span class="key-cap"></span><span class="key-hint">リセット</span></button>
-      <button id="key-select" class="key" type="button"><span class="key-label">SELECT</span><span class="key-cap"></span><span class="key-hint">モード切替</span></button>
+      <button id="key-select" class="key" type="button"><span class="key-label">SELECT</span><span class="key-cap"></span><span class="key-hint" id="select-hint">モード切替</span></button>
       <button id="key-set" class="key" type="button"><span class="key-label">SET</span><span class="key-cap"></span><span class="key-hint" id="set-hint">バトル開始</span></button>
     </div>
     <div class="slot">
@@ -167,7 +173,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
     </div>
     <div id="room-controls" hidden>
-      <p class="hint">1Pに読み込んだカードで挑戦します。勝者が部屋に残り、次の挑戦を待ちます。合体カードは使えません。</p>
+      <p class="hint">本体の CARD IN で1Pのカードを読み込み、液晶の下の ◀▶ で部屋を選んで SET（または L-BATTLE）で挑戦します。SELECT を押すとフリーバトルに戻ります。勝者が部屋に残ります。合体・アイテムは使えません。</p>
       <button id="refresh" class="ghost" type="button">部屋を更新</button>
       <div id="rooms"></div>
     </div>
@@ -202,6 +208,9 @@ let cameraAbort: AbortController | undefined
 let cameraSession: CameraSession | undefined
 let torchOn = false
 let audio: AudioContext | undefined
+let rooms: Room[] = []
+let roomIndex = 0
+let roomFight: RoomFight | null = null
 let lit = new Set<Indicator>()
 let litTimer = 0
 
@@ -361,28 +370,52 @@ function controllable(side: Side) {
   return side === 'left' || !campaign
 }
 
+function currentRoom() { return rooms[roomIndex] ?? null }
+/** Rooms always use the original single card, as the Worker recomputes it. */
+function challenger(): Fighter | null {
+  const code = heroCards.get('left')
+  return code ? decodeBarcode(code) : null
+}
+function roomRestriction(room: Room | null, fighter: Fighter | null) {
+  if (!room) return '部屋を読み込めていません'
+  if (room.champion?.isOwner) return 'あなたが王者です。ほかの部屋に挑戦できます'
+  if (fighter && room.barcodePrefix && !fighter.barcode.startsWith(room.barcodePrefix)) return `${room.barcodePrefix}で始まるカードだけ挑戦できます`
+  return ''
+}
+function canChallenge() {
+  const room = currentRoom()
+  return online && !busy && !!challenger() && !!room && !roomRestriction(room, challenger())
+}
+function lcdSides(): { left: Fighter | null; right: Fighter | null } {
+  if (!online) return slots
+  const room = currentRoom()
+  if (roomFight && room && roomFight.roomId === room.id) return { left: roomFight.challenger, right: roomFight.champion }
+  return { left: challenger(), right: room?.champion?.fighter ?? null }
+}
+
 function renderLcd() {
+  const sides = lcdSides()
   const value = (fighter: Fighter | null, key: 'hp' | 'attack' | 'defense') => fighter ? String(fighter[key]) : ''
   const rows: [string, string, 'hp' | 'attack' | 'defense'][] = [['HP', 'DAMAGE', 'hp'], ['ST', 'MP', 'attack'], ['DF', 'PP', 'defense']]
   $('lcd-stats').innerHTML = rows.map(([label, small, key]) => `
     <div class="stat-row">
-      ${segments(value(slots.left, key), 5)}
+      ${segments(value(sides.left, key), 5)}
       <span class="stat-label"><b>${label}</b><small class="${small === 'DAMAGE' && lit.has('damage') ? 'on' : ''}">${small}</small></span>
-      ${segments(value(slots.right, key), 5)}
+      ${segments(value(sides.right, key), 5)}
     </div>`).join('') + `
     <div class="stat-row mini">
-      <span class="mini-pair"><small>MP</small>${segments(slots.left ? String(slots.left.mp) : '', 2)}<small>PP</small>${segments(slots.left ? String(slots.left.pp) : '', 2)}</span>
+      <span class="mini-pair"><small>MP</small>${segments(sides.left ? String(sides.left.mp) : '', 2)}<small>PP</small>${segments(sides.left ? String(sides.left.pp) : '', 2)}</span>
       <span class="hp-bars">${(['left', 'right'] as const).map(side => {
-        const fighter = slots[side]
+        const fighter = sides[side]
         const max = fighter ? (fighter.maxHp && fighter.maxHp > 0 ? fighter.maxHp : Math.max(fighter.hp, 1)) : 1
         const ratio = fighter ? Math.max(0, Math.min(1, fighter.hp / max)) : 0
         return `<i class="hp-bar ${side}"><i style="width:${(ratio * 100).toFixed(1)}%"></i></i>`
       }).join('')}</span>
-      <span class="mini-pair"><small>MP</small>${segments(slots.right ? String(slots.right.mp) : '', 2)}<small>PP</small>${segments(slots.right ? String(slots.right.pp) : '', 2)}</span>
+      <span class="mini-pair"><small>MP</small>${segments(sides.right ? String(sides.right.mp) : '', 2)}<small>PP</small>${segments(sides.right ? String(sides.right.pp) : '', 2)}</span>
     </div>`
-  const waitingCard = !online && (!slots.left || !slots.right) && !duel
+  const waitingCard = online ? !sides.left : (!slots.left || !slots.right) && !duel
   const flags: Record<Indicator, boolean> = {
-    battle: !!duel,
+    battle: online ? !!roomFight || busy : !!duel,
     card: waitingCard || !!cameraSession || !$('camera-panel').hidden,
     escape: false,
     critical: lit.has('critical'),
@@ -395,20 +428,24 @@ function renderLcd() {
     flag.classList.toggle('blink', flag.dataset.ind === 'card' && waitingCard)
   })
   const job = (side: Side, kind: 'war' | 'mag') => {
-    const fighter = slots[side]
+    const fighter = sides[side]
     $(`${side === 'left' ? 'l' : 'r'}-${kind}`).classList.toggle('on', !!fighter && (kind === 'mag' ? fighter.job > 6 : fighter.job <= 6))
   }
   job('left', 'war'); job('left', 'mag'); job('right', 'war'); job('right', 'mag')
   $('ic-key').classList.toggle('on', !!campaign && campaign.mode === 'C1' && campaign.keys.length < 3)
-  $('ic-item').classList.toggle('on', combined.size > 0)
+  $('ic-item').classList.toggle('on', !online && combined.size > 0)
   $('ic-info').classList.toggle('on', false)
-  $('lcd-mode').textContent = online ? 'ON' : mode
+  $('lcd-mode').textContent = online ? 'VS' : mode
 }
 
 function renderLeds() {
   const leds = [...$('leds').children] as HTMLElement[]
   const snapshot = duel?.snapshot()
   leds.forEach(led => led.classList.remove('on', 'win'))
+  if (online) {
+    if (roomFight && roomFight.roomId === currentRoom()?.id) leds[roomFight.winner === 'left' ? 0 : 4].classList.add('on', 'win')
+    return
+  }
   if (!snapshot) return
   if (snapshot.result) {
     const index = snapshot.result.winner === 'left' ? 0 : 4
@@ -478,17 +515,19 @@ function render() {
     const canAct = controllable(side)
     const fighter = duel?.snapshot()[side]
     const herbsBlocked = !!duel?.snapshot().herbsBlocked[side]
-    const startable = !fighting && readyToFight() && (side === 'left' || !campaign)
+    const startable = online ? side === 'left' && canChallenge() : !fighting && readyToFight() && (side === 'left' || !campaign)
     $<HTMLButtonElement>(`${prefix}-battle`).disabled = !(canAct || startable)
     $<HTMLButtonElement>(`${prefix}-power`).disabled = !canAct || !fighter || fighter.pp === 0 || herbsBlocked
     document.querySelector(`.grip-${prefix}`)!.classList.toggle('active', canAct || startable)
   }
   const setKey = $<HTMLButtonElement>('key-set')
   const needsCampaign = mode !== 'C0' && !campaign
-  setKey.disabled = online || busy || fighting || (needsCampaign ? !slots.left : !readyToFight())
+  setKey.disabled = online ? !canChallenge() : busy || fighting || (needsCampaign ? !slots.left : !readyToFight())
   setKey.classList.toggle('ready', !setKey.disabled)
-  $('set-hint').textContent = needsCampaign ? 'シナリオ開始' : 'バトル開始'
-  $<HTMLButtonElement>('key-select').disabled = online || fighting
+  $('set-hint').textContent = online ? '挑戦' : needsCampaign ? 'シナリオ開始' : 'バトル開始'
+  $<HTMLButtonElement>('key-select').disabled = busy || fighting
+  $('select-hint').textContent = online ? 'フリーへ' : mode === 'C2' ? '勝ち抜きへ' : 'モード切替'
+  renderRoomBar()
   $('battle-actions').hidden = !fighting
   if (fighting && duel) {
     const snapshot = duel.snapshot()
@@ -500,8 +539,7 @@ function render() {
   }
   document.querySelectorAll<HTMLButtonElement>('[data-slot]').forEach(button => {
     button.setAttribute('aria-pressed', String(button.dataset.slot === target))
-    button.disabled = online && button.dataset.slot !== 'left'
-    if (button.dataset.slot === 'enemy') button.hidden = mode !== 'C2' || online
+    button.hidden = online ? button.dataset.slot !== 'left' : button.dataset.slot === 'enemy' && mode !== 'C2'
   })
   document.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach(button => {
     button.setAttribute('aria-pressed', String(button.dataset.mode === mode))
@@ -548,18 +586,26 @@ async function loadBarcode(barcode: string) {
       render()
       return
     }
+    if (online && fighter.kind !== 'fighter') throw new Error('勝ち抜き部屋ではアイテムは使えません。戦士か魔法使いのカードを読み込んでください。')
     clearDuel()
-    const side: Side = target.startsWith('left') ? 'left' : 'right'
-    const isCard = target.endsWith('-card')
+    let side: Side = target.startsWith('left') ? 'left' : 'right'
+    let isCard = target.endsWith('-card')
+    if (!isCard && fighter.kind !== 'fighter') {
+      // An item is always a second card: equip it to the fighter just read
+      // instead of refusing it (1P first, then the item, is the usual order).
+      const owner = ([side, side === 'left' ? 'right' : 'left'] as const).find(s => slots[s] && !combined.has(s))
+      if (!owner) throw new Error('アイテムは戦士・魔法使いに合体させるカードです。先にキャラクターのカードを読み込んでください。')
+      side = owner
+      isCard = true
+    }
     if (isCard) {
-      if (online) throw new Error('対戦部屋では元の1枚のみを使います')
-      if (!slots[side]) throw new Error('先に戦士を読み込んでください')
+      const base = slots[side]
+      if (!base) throw new Error('先に戦士を読み込んでください')
       if (combined.has(side)) throw new Error('2枚目は1回のみです。戦士を再読込してください')
-      slots[side] = combineFighters(slots[side], fighter)
+      slots[side] = combineFighters(base, fighter)
       combined.add(side)
       secondCards.set(side, fighter.barcode)
     } else {
-      if (fighter.race > 4) throw new Error('このコードはアイテムです。「合体」に切り替えて読み込んでください')
       slots[side] = fighter
       heroCards.set(side, fighter.barcode)
       combined.delete(side)
@@ -570,8 +616,12 @@ async function loadBarcode(barcode: string) {
       updateCampaignStatus()
     }
     guardianStar = undefined
+    roomFight = null
     nextTargetAfter(side, isCard)
-    status(`${SLOT_NAMES[isCard ? `${side}-card` : side]} 読み込み完了${slots.left && slots.right && mode === 'C0' && !online ? ' — SETでバトル開始' : ''}`)
+    const loaded = isCard ? `${side === 'left' ? '1P' : '2P'}に${fighter.name}を合体` : `${SLOT_NAMES[side]} ${fighter.name} 読み込み完了`
+    const next = online ? (canChallenge() ? ' — SETで挑戦' : ` — ${roomRestriction(currentRoom(), challenger())}`)
+      : slots.left && slots.right && mode === 'C0' ? ' — SETでバトル開始' : ''
+    status(`${loaded}${next}`)
     flashIndicators([])
     render()
     beep()
@@ -683,6 +733,10 @@ function act(action: BattleAction) {
 }
 function grip(side: Side, button: 'battle' | 'power') {
   unlockAudio()
+  if (online) {
+    if (side === 'left' && button === 'battle') void challengeCurrent()
+    return
+  }
   if (!battling()) {
     if (button === 'battle') startBattle()
     return
@@ -703,7 +757,11 @@ $('auto').addEventListener('click', () => {
   while (!duel.snapshot().result) duel.auto()
   showDuel(duel.snapshot().log.slice(before).slice(-3))
 })
-$('key-set').addEventListener('click', () => { unlockAudio(); startBattle() })
+$('key-set').addEventListener('click', () => {
+  unlockAudio()
+  if (online) void challengeCurrent()
+  else startBattle()
+})
 
 function resetAll(message = 'カードを読み込んでください') {
   stopCamera()
@@ -744,6 +802,9 @@ function setMode(next: Mode) {
 }
 $('key-select').addEventListener('click', () => {
   unlockAudio()
+  // SELECT cycles C0 → C1 → C2 → 勝ち抜き部屋 → C0.
+  if (online) { setOnline(false); setMode('C0'); return }
+  if (mode === 'C2') { setOnline(true); return }
   setMode(MODES[(MODES.indexOf(mode) + 1) % MODES.length])
 })
 document.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach(button => {
@@ -907,74 +968,142 @@ $('torch').addEventListener('click', () => {
 window.addEventListener('pagehide', stopCamera)
 document.addEventListener('visibilitychange', () => { if (document.hidden && cameraSession) stopCamera() })
 
+function renderRoomBar() {
+  $('room-bar').hidden = !online
+  if (!online) return
+  const room = currentRoom()
+  $<HTMLButtonElement>('room-prev').disabled = busy || rooms.length < 2
+  $<HTMLButtonElement>('room-next').disabled = busy || rooms.length < 2
+  if (!room) {
+    $('room-name').textContent = '部屋を読み込み中…'
+    $('room-info').textContent = ''
+    return
+  }
+  $('room-name').textContent = `${room.name}（${roomIndex + 1}/${rooms.length}）`
+  const champion = room.champion
+  const holder = champion ? `王者 ${champion.product?.name || champion.barcode} ${champion.wins}連勝` : '王者なし — 勝てば王者'
+  const restriction = roomRestriction(room, challenger())
+  $('room-info').textContent = restriction ? `${holder} / ${restriction}` : `${holder}${room.barcodePrefix ? ` / ${room.barcodePrefix}始まり限定` : ''}`
+}
+function selectRoom(index: number) {
+  if (busy || rooms.length === 0) return
+  roomIndex = (index + rooms.length) % rooms.length
+  beep(1320)
+  render()
+  renderRoomList()
+}
+$('room-prev').addEventListener('click', () => selectRoom(roomIndex - 1))
+$('room-next').addEventListener('click', () => selectRoom(roomIndex + 1))
+function renderRoomList() {
+  $('rooms').replaceChildren(...rooms.map((room, index) => {
+    const card = document.createElement('article')
+    if (index === roomIndex) card.classList.add('selected')
+    const heading = document.createElement('h3')
+    heading.textContent = room.name
+    const description = document.createElement('p')
+    description.textContent = room.champion
+      ? `王者: ${room.champion.product?.name || room.champion.barcode} / ${room.champion.wins}連勝`
+      : '王者募集中 — 最初の挑戦者が王者になります'
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.textContent = index === roomIndex ? '選択中' : 'この部屋を選ぶ'
+    button.disabled = busy || index === roomIndex
+    button.addEventListener('click', () => {
+      selectRoom(index)
+      document.querySelector('.bb2')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+    const product = room.champion?.product
+    if (product?.thumbnail && validProductThumbnail(product.thumbnail)) {
+      const image = document.createElement('img')
+      image.src = product.thumbnail
+      image.alt = product.name || room.champion!.barcode
+      image.className = 'product-image'
+      card.append(image)
+    }
+    const regulation = document.createElement('p')
+    regulation.textContent = room.barcodePrefix ? `レギュレーション: ${room.barcodePrefix}で始まるコード` : 'レギュレーション: 無差別'
+    card.append(heading, regulation, description)
+    appendAmazonLinks(card, product)
+    card.append(button)
+    return card
+  }))
+}
 async function refreshRooms() {
   try {
-    const { rooms } = await api<{ rooms: Room[] }>('/api/rooms')
-    $('rooms').replaceChildren(...rooms.map(room => {
-      const card = document.createElement('article')
-      const heading = document.createElement('h3')
-      heading.textContent = room.name
-      const description = document.createElement('p')
-      description.textContent = room.champion
-        ? `王者: ${room.champion.product?.name || room.champion.barcode} / ${room.champion.wins}連勝`
-        : '王者募集中 — 最初の挑戦者が王者になります'
-      const button = document.createElement('button')
-      button.type = 'button'
-      button.textContent = room.champion?.isOwner ? 'あなたが現在の王者です' : 'この部屋に挑戦'
-      button.disabled = busy || !!room.champion?.isOwner
-      button.addEventListener('click', () => void challenge(room.id))
-      const product = room.champion?.product
-      if (product?.thumbnail && validProductThumbnail(product.thumbnail)) {
-        const image = document.createElement('img')
-        image.src = product.thumbnail
-        image.alt = product.name || room.champion!.barcode
-        image.className = 'product-image'
-        card.append(image)
-      }
-      const regulation = document.createElement('p')
-      regulation.textContent = room.barcodePrefix ? `レギュレーション: ${room.barcodePrefix}で始まるコード` : 'レギュレーション: 無差別'
-      card.append(heading, regulation, description)
-      appendAmazonLinks(card, product)
-      card.append(button)
-      return card
-    }))
+    const selected = currentRoom()?.id
+    rooms = (await api<{ rooms: Room[] }>('/api/rooms')).rooms
+    roomIndex = Math.max(0, rooms.findIndex(room => room.id === selected))
+    render()
+    renderRoomList()
   } catch (error) { status(`対戦部屋: ${errorMessage(error)}（Cloudflare Workerを起動してください）`) }
 }
-async function challenge(id: string) {
-  if (busy) return
-  if (!slots.left) { status('先に1Pのバーコードを読み込んでください'); return }
+/** Worker battles put the champion on the left; show the challenger as 1P. */
+function fromChampionView(line: string) {
+  if (line.includes('claims the empty room')) return '空き部屋に入りました'
+  return line.replace(/^([12])P/, (_, n) => n === '1' ? '2P' : '1P')
+}
+async function challengeCurrent() {
+  const room = currentRoom()
+  const fighter = challenger()
+  if (busy || !room) return
+  if (!fighter) { status('先にCARD INで1Pのカードを読み込んでください'); return }
+  const restriction = roomRestriction(room, fighter)
+  if (restriction) { status(restriction); return }
   busy = true
+  roomFight = null
+  status(`${room.name}に挑戦中…`)
   render()
+  renderRoomList()
   void api<{ amazonAffiliateEnabled: boolean }>('/api/config')
     .then(config => { $('amazon-disclosure').hidden = !config.amazonAffiliateEnabled })
     .catch(() => {})
-  $('rooms').querySelectorAll('button').forEach(button => { button.disabled = true })
   try {
     await ensureSession()
-    const result = await api<{ message: string; battle?: { log: string[] } }>(`/api/rooms/${encodeURIComponent(id)}/challenge`, { barcode: slots.left.barcode })
-    status(translate(result.message))
-    const lines = result.battle?.log || []
+    const championBefore = room.champion?.fighter ?? null
+    const result = await api<{ message: string; battle?: { log: string[]; winner: 'left' | 'right'; leftHp: number; rightHp: number } }>(
+      `/api/rooms/${encodeURIComponent(room.id)}/challenge`, { barcode: fighter.barcode })
+    const lines = (result.battle?.log || []).map(fromChampionView)
     log(lines)
+    if (result.battle) {
+      roomFight = {
+        roomId: room.id,
+        challenger: { ...fighter, maxHp: fighter.hp, hp: result.battle.rightHp },
+        champion: championBefore ? { ...championBefore, maxHp: championBefore.hp, hp: result.battle.leftHp } : null,
+        winner: result.battle.winner === 'right' ? 'left' : 'right',
+      }
+    }
     flashIndicators(indicatorsFor(lines.slice(-2)))
     sweepLeds('both')
+    beep(roomFight?.winner === 'left' ? 1760 : 440, 0.35)
+    status(`${translate(result.message)}${lines.length > 1 ? `（${lines.length - 1}手）` : ''}`)
   } catch (error) { status(errorMessage(error)) }
-  finally { busy = false; render(); await refreshRooms() }
+  finally {
+    busy = false
+    render()
+    const fight = roomFight
+    await refreshRooms()
+    roomFight = fight
+    render()
+  }
 }
 function setOnline(value: boolean) {
   if (battling()) clearDuel()
   online = value
+  roomFight = null
   $('local-tab').setAttribute('aria-pressed', String(!value))
   $('rooms-tab').setAttribute('aria-pressed', String(value))
   $('local-controls').hidden = value
   $('room-controls').hidden = !value
   if (value) {
     setTarget('left')
-    status('勝ち抜き部屋: 1Pのカードを読み込み、部屋を選んで挑戦')
+    status(challenger() ? '勝ち抜き部屋: ◀▶で部屋を選び、SETで挑戦' : '勝ち抜き部屋: CARD INで1Pのカードを読み込み、SETで挑戦')
   } else status(`${MODE_NAMES[mode]}（${mode}）`)
+  beep(1320)
   render()
   if (value) void refreshRooms()
 }
-$('local-tab').addEventListener('click', () => setOnline(false))
-$('rooms-tab').addEventListener('click', () => setOnline(true))
+const showUnit = () => document.querySelector('.bb2')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+$('local-tab').addEventListener('click', () => { setOnline(false); showUnit() })
+$('rooms-tab').addEventListener('click', () => { setOnline(true); showUnit() })
 $('refresh').addEventListener('click', () => void refreshRooms())
 render()

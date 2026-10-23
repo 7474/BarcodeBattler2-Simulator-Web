@@ -134,14 +134,15 @@ test('fusion caps stats, retains base speed and original component values', () =
   assert.equal(a.attack, 18000)
 })
 
-test('item assembly accepts herb/MP items and preserves the second-job equipment quirk', () => {
+test('item assembly accepts herb/MP items and keeps weapons and armour off magicians', () => {
   const mage = fighter({ job: 7, mp: 10, pp: 95 })
   const herbs = decodeBarcode('0501010970005')
   const mp = decodeBarcode('0501010980004')
   assert.equal(combine(mage, herbs).pp, 99)
   assert.equal(combine(mage, mp).mp, 20)
   assert.throws(() => combine(fighter(), mp), /Warriors/)
-  assert.equal(combine(mage, decodeBarcode('00000505')).attack, 3500)
+  assert.throws(() => combine(mage, decodeBarcode('00000505')), /Incompatible/)
+  assert.equal(combine(fighter(), decodeBarcode('00000505')).attack, 3500)
   const curse = decodeBarcode('0501010500318', { rng: () => 0 })
   assert.equal(combine(fighter({ attack: 500 }), curse).attack, 0)
 })

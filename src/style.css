@@ -191,6 +191,28 @@ button:disabled { cursor: not-allowed; }
   overflow-wrap: anywhere;
 }
 
+/* Room picker shown on the unit while in 勝ち抜き部屋, so no scrolling is needed. */
+.room-bar {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 6px; align-items: stretch;
+  margin-top: 6px;
+}
+.room-bar button {
+  min-height: 44px; padding: 0;
+  border: 0; border-radius: 8px;
+  color: #171a2c; font-size: 1rem;
+  background: linear-gradient(180deg, var(--button-hi), var(--button));
+  box-shadow: 0 3px 0 var(--button-lo), inset 0 1px 0 rgba(255, 255, 255, .55);
+}
+.room-bar button:disabled { filter: saturate(.25) brightness(.6); }
+.room-now {
+  display: flex; flex-direction: column; justify-content: center; min-width: 0;
+  padding: 4px 10px; border-radius: 6px;
+  background: #101112; box-shadow: inset 0 1px 4px rgba(0, 0, 0, .8);
+  line-height: 1.3;
+}
+.room-now b { font-size: clamp(.78rem, 2.4vw, .92rem); color: #fff; overflow-wrap: anywhere; }
+.room-now span { font-size: clamp(.66rem, 2vw, .78rem); color: #ffd9a8; overflow-wrap: anywhere; }
+
 /* ---------- BATTLE SIDE LEDs ---------- */
 .leds { display: flex; justify-content: space-between; padding: 10px 6% 0; }
 .led {
@@ -366,6 +388,7 @@ input, select {
 #log { max-height: 240px; overflow: auto; padding-left: 1.4rem; font-size: .82rem; font-family: ui-monospace, Menlo, Consolas, monospace; }
 #rooms { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
 #rooms article { padding: 12px; border-radius: 12px; background: #fff; border: 1px solid var(--panel-line); }
+#rooms article.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(63, 79, 168, .18); }
 #rooms h3 { margin: 0 0 6px; }
 #rooms p { margin: 0 0 8px; font-size: .85rem; overflow-wrap: anywhere; }
 #rooms article button { width: 100%; }
