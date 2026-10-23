@@ -378,6 +378,7 @@ input, select {
 .card-body { display: flex; gap: 8px; align-items: flex-start; }
 .product-image { width: 56px; height: 56px; object-fit: contain; background: #fff; border-radius: 6px; border: 1px solid var(--panel-line); flex: none; }
 .product-name { margin: 0; font-size: .82rem; overflow-wrap: anywhere; }
+.kind { margin: 2px 0 0; font-size: .76rem; font-weight: 700; overflow-wrap: anywhere; }
 .stats { margin: 2px 0 0; font-size: .74rem; color: var(--page-muted); font-variant-numeric: tabular-nums; }
 .empty-copy { margin: 0; font-size: .8rem; color: var(--page-muted); }
 .product-links { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; font-size: .72rem; }

@@ -1,5 +1,5 @@
 import './style.css'
-import { createBattle, combineFighters, decodeBarcode, MAGIC_COSTS, type BattleAction, type BattleSession, type Fighter } from './game.ts'
+import { createBattle, combineFighters, decodeBarcode, jobName, MAGIC_COSTS, RACE_NAMES, type BattleAction, type BattleSession, type Fighter } from './game.ts'
 import { campaignEnemy, createCampaign, finishCampaignBattle, selectCampaignWorld, setCampaignEnemy, switchCampaignHero, type Campaign } from './campaign.ts'
 import { cameraErrorMessage, interpretScan, requestBarcodeCamera, startBarcodeCamera, type CameraSession } from './scan.ts'
 
@@ -75,9 +75,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
               <span class="flag" data-ind="miss">MISS</span>
             </div>
             <div class="lcd-row lcd-icons">
-              <span class="icons">${lcdIcon('l-mag', ICONS.magician, '1P 魔法使い')}${lcdIcon('l-war', ICONS.warrior, '1P 戦士')}${lcdIcon('ic-key', ICONS.key, '鍵')}${lcdIcon('ic-item', ICONS.item, 'アイテム合体')}</span>
+              <span class="icons">${lcdIcon('l-mag', ICONS.magician, '1P 職業: 魔法使い')}${lcdIcon('l-war', ICONS.warrior, '1P 職業: 戦士')}${lcdIcon('ic-key', ICONS.key, '鍵')}${lcdIcon('ic-item', ICONS.item, 'アイテム合体')}</span>
               <span class="lcd-mode" id="lcd-mode">C0</span>
-              <span class="icons">${lcdIcon('ic-info', ICONS.info, '情報')}${lcdIcon('r-war', ICONS.warrior, '2P 戦士')}${lcdIcon('r-mag', ICONS.magician, '2P 魔法使い')}</span>
+              <span class="icons">${lcdIcon('ic-info', ICONS.info, '情報')}${lcdIcon('r-war', ICONS.warrior, '2P 職業: 戦士')}${lcdIcon('r-mag', ICONS.magician, '2P 職業: 魔法使い')}</span>
             </div>
             <div class="lcd-stats" id="lcd-stats"></div>
             <div id="camera-panel" class="viewfinder" hidden>
@@ -182,7 +182,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </section>
   <section class="help"><details><summary>遊び方と注意</summary>
     <p>下の CARD IN で 1P と 2P のカードを読み込み、SET（または L-BATTLE / R-BATTLE）でバトル開始。自分の番に BATTLE で攻撃、POWER で回復します。光っている側のボタンが操作できます。薬草・魔法は操作パネルから使います。</p>
-    <p>SELECT でモードを切り替えます。C1 は 1P に戦士、2P に魔法使い（任意）を読み込んで SET。C2 は SET 後に「C2の敵」へ敵カードを読み込みます。「1P 合体」「2P 合体」で2枚目のカードを合体できます。</p>
+    <p>カードは種族0〜4がキャラカード（機械族・アニマル族・魚族・バード族・ヒューマン族）、5〜9がアイテムカード（武器・防具・HPアップ）です。職業0〜6は戦士、7〜9は魔法使いで、どちらになるかは読み込んだバーコードで決まります。</p>
+    <p>SELECT でモードを切り替えます。C1/C2 は 1P に職業が戦士のキャラカード、2P に職業が魔法使いのキャラカード（任意）を読み込んで SET。C2 は SET 後に「C2の敵」へ敵のキャラカードを読み込みます。アイテムカードは直前に読み込んだキャラカードに合体します。</p>
     <p>カメラはHTTPSまたはlocalhostと、ブラウザの許可が必要です。映像は端末の中だけで解析し、サーバーへ送りません。読めないときは数字を入力できます。</p>
     <p>「国内49コード」部屋は49で始まるコード専用です。49は商品の原産国を保証しません。商品名・画像は見つかった場合だけ表示します。逃走と戦闘後アイテムは未対応です。</p>
   </details></section>
@@ -228,30 +229,30 @@ function translate(raw: string) {
     ['own champion', '自分の王者には挑戦できません。'],
     ['champion changed', '王者が入れ替わりました。部屋を更新して挑戦し直してください。'],
     ['Too many requests', '操作が多すぎます。1分ほど待ってから試してください。'],
-    ['is an item', 'アイテムのコードでは挑戦できません。戦士のカードを読み込んでください。'],
+    ['is an item', 'アイテムカードでは挑戦できません。キャラカードを読み込んでください。'],
     ['cannot enter a standalone', 'このコードでは挑戦できません。'],
     ['valid EAN-8 or EAN-13', '8桁または13桁のJAN/EANではありません。チェックデジットも確認してください。'],
     ['Room not found', '部屋が見つかりません。部屋を更新してください。'],
     ['Invalid JAN/EAN', '8桁または13桁のJAN/EANではありません。チェックデジットも確認してください。'],
     ['not a hero', 'このカードは主人公にできません。'],
     ['starting limits', '主人公カードの初期能力が上限を超えています。'],
-    ['wrong job', '2Pには魔法使いのカードを読み込んでください。'],
-    ['First card must be a fighter', '先に戦士のカードを読み込んでください。'],
+    ['wrong job', '2Pには職業が魔法使いのキャラカードを読み込んでください。'],
+    ['First card must be a fighter', '先にキャラカードを読み込んでください。'],
     ['identical card suffixes', '下7桁が同じカードは合体できません。'],
-    ['fusion requires', '冒険・挑戦の合体には、同じ種族と職業のカードが必要です。'],
+    ['fusion requires', '冒険・挑戦でキャラカード同士を合体するには、同じ種族・同じ職業のカードが必要です。'],
     ['Information cards', '情報カードは冒険モードだけで使えます。'],
-    ['cannot use MP', '戦士はMPアイテムを使えません。'],
-    ['Incompatible equipment', 'この装備は合体できません。'],
-    ['must be a warrior', '1Pの主人公は戦士にしてください。'],
-    ['Invalid partner', '魔法使いのカードを確認してください。'],
-    ['living hero', '戦える主人公カードを読み込んでください。'],
-    ['Items cannot battle', 'アイテム単体では戦えません。'],
-    ['Magic is unavailable', '魔法を使えません。MPが足りないか、このカードは戦士です。'],
+    ['cannot use MP', '職業が戦士のキャラにはMPアップを合体できません。'],
+    ['Incompatible equipment', '職業が魔法使いのキャラには武器・防具を合体できません。'],
+    ['must be a warrior', 'C1/C2の1Pには職業が戦士のキャラカードを読み込んでください。'],
+    ['Invalid partner', '2Pのキャラカードを確認してください。'],
+    ['living hero', 'HPが0より大きいキャラカードを読み込んでください。'],
+    ['Items cannot battle', 'アイテムカード単体では戦えません。'],
+    ['Magic is unavailable', '魔法を使えません。MPが足りないか、職業が戦士のキャラです。'],
     ['Herbs are unavailable', '薬草を使えません。'],
     ['Battle has ended', '戦闘は終わっています。'],
     ['Campaign is finished', 'このシナリオは終了しています。'],
     ['C1 enemies', '冒険モードの敵はワールドで決まります。'],
-    ['Enemy must be', '敵にはキャラクターのコードを指定してください。'],
+    ['Enemy must be', '敵にはキャラカードを指定してください。'],
     ['No living reserve', '交代できる主人公がいません。'],
     ['LH requires', 'L-Hには鍵が3個必要です。'],
     ['Finish the current enemy', 'いまの敵を倒してから移動できます。'],
@@ -386,7 +387,55 @@ function canChallenge() {
   const room = currentRoom()
   return online && !busy && !!challenger() && !!room && !roomRestriction(room, challenger())
 }
+type Frame = { left: Fighter | null; right: Fighter | null; lines: string[]; attacker?: Side }
+let playback: { frames: Frame[]; index: number; timer: number; finish: () => void } | null = null
+function playing() { return !!playback }
+function attackerOf(lines: string[]): Side | undefined {
+  const match = lines.map(line => /^([12])P (攻撃|MISS|F[12])/.exec(line)).find(Boolean)
+  return match ? (match[1] === '1' ? 'left' : 'right') : undefined
+}
+function showFrame(frame: Frame, last: boolean) {
+  flashIndicators(indicatorsFor(frame.lines))
+  if (frame.attacker) sweepLeds(frame.attacker)
+  const text = summarize(frame.lines)
+  if (frame.lines.length) beep(frame.lines.some(line => line.includes('MISS')) ? 440 : frame.lines.some(line => line.includes('CRITICAL')) ? 2200 : 1760)
+  if (text && !last) status(`${text}（SETでスキップ）`)
+  render()
+}
+/**
+ * Replay a finished battle action by action so it is not just a result.
+ * SET (or a tap on the LCD) skips to the end. Resolves once the last frame shows.
+ */
+function play(frames: Frame[]): Promise<void> {
+  skipPlayback()
+  if (frames.length === 0) return Promise.resolve()
+  return new Promise(resolve => {
+    const interval = Math.max(140, Math.min(750, 750 * 30 / frames.length))
+    const state = { frames, index: 0, timer: 0, finish: () => {} }
+    const step = () => {
+      const frame = state.frames[state.index]
+      const last = state.index === state.frames.length - 1
+      if (last) { state.finish(); return }
+      showFrame(frame, false)
+      state.index++
+      state.timer = window.setTimeout(step, interval)
+    }
+    state.finish = () => {
+      window.clearTimeout(state.timer)
+      playback = null
+      state.index = state.frames.length - 1
+      flashIndicators(indicatorsFor(state.frames[state.index].lines))
+      resolve()
+    }
+    playback = state
+    step()
+  })
+}
+function skipPlayback() { playback?.finish() }
+$('lcd').addEventListener('click', skipPlayback)
+
 function lcdSides(): { left: Fighter | null; right: Fighter | null } {
+  if (playback) { const frame = playback.frames[playback.index]; return { left: frame.left, right: frame.right } }
   if (!online) return slots
   const room = currentRoom()
   if (roomFight && room && roomFight.roomId === room.id) return { left: roomFight.challenger, right: roomFight.champion }
@@ -453,6 +502,11 @@ function renderLeds() {
   } else leds[snapshot.turn === 'left' ? 0 : 4].classList.add('on')
 }
 
+/** The second card's own label (e.g. 武器（使い捨て）, 薬草アップ). */
+function secondName(side: Side, race: number) {
+  const code = secondCards.get(side)
+  try { return code ? decodeBarcode(code).name : RACE_NAMES[race] } catch { return RACE_NAMES[race] }
+}
 function renderCards() {
   const cards = (['left', 'right'] as const).map(side => {
     const card = document.createElement('article')
@@ -475,7 +529,8 @@ function renderCards() {
     if (!fighter) {
       const empty = document.createElement('p')
       empty.className = 'empty-copy'
-      empty.textContent = side === 'left' ? 'CARD IN で1Pのカードを読み込みます' : mode === 'C0' ? 'CARD IN で2Pのカードを読み込みます' : '2Pは魔法使い（任意）です'
+      empty.textContent = mode === 'C0' || online ? `CARD IN で${side === 'left' ? '1P' : '2P'}のキャラカードを読み込みます`
+        : side === 'left' ? '職業が戦士のキャラカードを読み込みます' : '職業が魔法使いのキャラカード（任意）を読み込みます'
       card.append(empty)
       return card
     }
@@ -493,10 +548,15 @@ function renderCards() {
     const label = document.createElement('p')
     label.className = 'product-name'
     label.textContent = product?.name || (fighter.barcode === '0000000000000' ? 'シナリオの敵' : fighter.barcode)
+    const kind = document.createElement('p')
+    kind.className = 'kind'
+    const fused = combined.has(side) && fighter.race2 !== undefined
+      ? ` + ${fighter.union ? 'キャラ' : 'アイテム'} ${secondName(side, fighter.race2)}` : ''
+    kind.textContent = `キャラ 種族${fighter.race} ${RACE_NAMES[fighter.race]} / 職業${fighter.job} ${jobName(fighter.job)}${fused}`
     const stats = document.createElement('p')
     stats.className = 'stats'
     stats.textContent = `HP ${fighter.hp} / ST ${fighter.attack} / DF ${fighter.defense} / 速さ ${fighter.speed} / MP ${fighter.mp} / 薬草 ${fighter.pp}`
-    text.append(label, stats)
+    text.append(label, kind, stats)
     body.append(text)
     card.append(body)
     appendAmazonLinks(card, product)
@@ -509,27 +569,27 @@ function render() {
   renderLcd()
   renderLeds()
   renderCards()
-  const fighting = battling()
+  const fighting = battling() || playing()
   for (const side of ['left', 'right'] as const) {
     const prefix = side === 'left' ? 'l' : 'r'
-    const canAct = controllable(side)
+    const canAct = !playing() && controllable(side)
     const fighter = duel?.snapshot()[side]
     const herbsBlocked = !!duel?.snapshot().herbsBlocked[side]
-    const startable = online ? side === 'left' && canChallenge() : !fighting && readyToFight() && (side === 'left' || !campaign)
+    const startable = playing() ? false : online ? side === 'left' && canChallenge() : !fighting && readyToFight() && (side === 'left' || !campaign)
     $<HTMLButtonElement>(`${prefix}-battle`).disabled = !(canAct || startable)
     $<HTMLButtonElement>(`${prefix}-power`).disabled = !canAct || !fighter || fighter.pp === 0 || herbsBlocked
     document.querySelector(`.grip-${prefix}`)!.classList.toggle('active', canAct || startable)
   }
   const setKey = $<HTMLButtonElement>('key-set')
   const needsCampaign = mode !== 'C0' && !campaign
-  setKey.disabled = online ? !canChallenge() : busy || fighting || (needsCampaign ? !slots.left : !readyToFight())
+  setKey.disabled = playing() ? false : online ? !canChallenge() : busy || fighting || (needsCampaign ? !slots.left : !readyToFight())
   setKey.classList.toggle('ready', !setKey.disabled)
-  $('set-hint').textContent = online ? '挑戦' : needsCampaign ? 'シナリオ開始' : 'バトル開始'
+  $('set-hint').textContent = playing() ? 'スキップ' : online ? '挑戦' : needsCampaign ? 'シナリオ開始' : 'バトル開始'
   $<HTMLButtonElement>('key-select').disabled = busy || fighting
   $('select-hint').textContent = online ? 'フリーへ' : mode === 'C2' ? '勝ち抜きへ' : 'モード切替'
   renderRoomBar()
-  $('battle-actions').hidden = !fighting
-  if (fighting && duel) {
+  $('battle-actions').hidden = !battling() || playing()
+  if (battling() && !playing() && duel) {
     const snapshot = duel.snapshot()
     const active = snapshot[snapshot.turn]
     const human = controllable(snapshot.turn)
@@ -548,8 +608,8 @@ function render() {
   $('mode-help').textContent = mode === 'C0'
     ? '1Pと2Pのカードを読み込み、SETでバトル開始。両方のプレイヤーが交互に操作します。'
     : mode === 'C1'
-      ? '1Pに戦士、2Pに魔法使い（任意）を読み込んでSET。L-1〜L-5の敵と戦い、鍵3個でL-Hが開きます。'
-      : '1Pに戦士、2Pに魔法使い（任意）を読み込んでSET。敵は「C2の敵」へ読み込むか下の欄に入力します。'
+      ? '1Pに職業が戦士のキャラカード、2Pに職業が魔法使いのキャラカード（任意）を読み込んでSET。L-1〜L-5の敵と戦い、鍵3個でL-Hが開きます。'
+      : '1Pに職業が戦士のキャラカード、2Pに職業が魔法使いのキャラカード（任意）を読み込んでSET。敵のキャラカードは「C2の敵」へ読み込むか下の欄に入力します。'
   $('campaign-setup').hidden = mode === 'C0' || !!campaign
 }
 
@@ -561,6 +621,7 @@ function nextTargetAfter(side: Side, wasCard: boolean) {
 }
 
 async function loadBarcode(barcode: string) {
+  skipPlayback()
   try {
     const interpreted = interpretScan(barcode)
     if (!interpreted.ok) {
@@ -573,7 +634,7 @@ async function loadBarcode(barcode: string) {
     if (battling()) throw new Error('バトル中はカードを読み込めません。決着後に読み込んでください。')
     const fighter = decodeBarcode(interpreted.code)
     if (target === 'enemy') {
-      if (fighter.kind !== 'fighter') throw new Error('敵にはキャラクターのコードを指定してください')
+      if (fighter.kind !== 'fighter') throw new Error('敵にはキャラカードを指定してください')
       $<HTMLInputElement>('enemy-barcode').value = fighter.barcode
       if (campaign?.mode === 'C2') {
         clearDuel()
@@ -586,7 +647,7 @@ async function loadBarcode(barcode: string) {
       render()
       return
     }
-    if (online && fighter.kind !== 'fighter') throw new Error('勝ち抜き部屋ではアイテムは使えません。戦士か魔法使いのカードを読み込んでください。')
+    if (online && fighter.kind !== 'fighter') throw new Error('勝ち抜き部屋ではアイテムカードは使えません。キャラカードを読み込んでください。')
     clearDuel()
     let side: Side = target.startsWith('left') ? 'left' : 'right'
     let isCard = target.endsWith('-card')
@@ -594,14 +655,14 @@ async function loadBarcode(barcode: string) {
       // An item is always a second card: equip it to the fighter just read
       // instead of refusing it (1P first, then the item, is the usual order).
       const owner = ([side, side === 'left' ? 'right' : 'left'] as const).find(s => slots[s] && !combined.has(s))
-      if (!owner) throw new Error('アイテムは戦士・魔法使いに合体させるカードです。先にキャラクターのカードを読み込んでください。')
+      if (!owner) throw new Error('アイテムカードはキャラカードに合体させるカードです。先にキャラカードを読み込んでください。')
       side = owner
       isCard = true
     }
     if (isCard) {
       const base = slots[side]
-      if (!base) throw new Error('先に戦士を読み込んでください')
-      if (combined.has(side)) throw new Error('2枚目は1回のみです。戦士を再読込してください')
+      if (!base) throw new Error('先にキャラカードを読み込んでください')
+      if (combined.has(side)) throw new Error('合体は1回のみです。キャラカードを読み込み直してください')
       slots[side] = combineFighters(base, fighter)
       combined.add(side)
       secondCards.set(side, fighter.barcode)
@@ -654,10 +715,15 @@ function startBattle() {
     duel = createBattle(slots.left!, slots.right!, Math.random, { star: campaign?.star ?? guardianStar })
     guardianStar = duel.snapshot().star
     campaignDuelResolved = false
-    if (campaign && duel.snapshot().turn === 'right' && !duel.snapshot().result) duel.auto()
     flashIndicators([])
     sweepLeds('both')
     beep(1320, 0.18)
+    if (campaign && duel.snapshot().turn === 'right' && !duel.snapshot().result) {
+      // The enemy moves first: show the opening state, then replay its attack.
+      const from = duel.snapshot().log.length
+      void replayDuel(from, [snapshotFrame(from)], () => duel!.auto())
+      return
+    }
     showDuel([])
   } catch (error) { status(errorMessage(error)) }
 }
@@ -724,15 +790,39 @@ function act(action: BattleAction) {
     const before = duel.snapshot().log.length
     const attacker = duel.snapshot().turn
     duel.act(action)
-    if (campaign && duel.snapshot().turn === 'right' && !duel.snapshot().result) duel.auto()
-    const lines = duel.snapshot().log.slice(before)
-    if (action.type === 'attack' || action.type === 'magic') sweepLeds(attacker)
-    beep(lines.some(line => line.includes('MISS')) ? 440 : lines.some(line => line.includes('CRITICAL')) ? 2200 : 1760)
-    showDuel(lines)
+    if (!campaign || duel.snapshot().turn !== 'right' || duel.snapshot().result) {
+      const lines = duel.snapshot().log.slice(before)
+      if (action.type === 'attack' || action.type === 'magic') sweepLeds(attacker)
+      beep(lines.some(line => line.includes('MISS')) ? 440 : lines.some(line => line.includes('CRITICAL')) ? 2200 : 1760)
+      showDuel(lines)
+      return
+    }
+    // The CPU enemy answers right away; replay both actions so its move is visible.
+    void replayDuel(before, [snapshotFrame(before)], () => duel!.auto())
   } catch (error) { status(errorMessage(error)) }
+}
+function snapshotFrame(from: number): Frame {
+  const snapshot = duel!.snapshot()
+  const lines = snapshot.log.slice(from)
+  return { left: snapshot.left, right: snapshot.right, lines, attacker: attackerOf(lines) }
+}
+/** Run `next` until it stops (or the battle ends), recording a frame per action, then replay them. */
+async function replayDuel(from: number, frames: Frame[], next: () => void, untilEnd = false) {
+  if (!duel) return
+  do {
+    const before = duel.snapshot().log.length
+    next()
+    frames.push(snapshotFrame(before))
+  } while (untilEnd && !duel.snapshot().result)
+  frames.push({ ...frames[frames.length - 1], lines: [] })
+  const session = duel
+  await play(frames)
+  // ON/OFF or a mode change during the replay discards this battle.
+  if (duel === session) showDuel(session.snapshot().log.slice(from).slice(-3))
 }
 function grip(side: Side, button: 'battle' | 'power') {
   unlockAudio()
+  if (playing()) return
   if (online) {
     if (side === 'left' && button === 'battle') void challengeCurrent()
     return
@@ -752,14 +842,13 @@ $('r-power').addEventListener('click', () => grip('right', 'power'))
 $('heal').addEventListener('click', () => act({ type: 'herbs', amount: Number($<HTMLSelectElement>('herbs').value) as 1 | 2 | 3 }))
 $('magic').addEventListener('click', () => act({ type: 'magic', spell: Number($<HTMLSelectElement>('spell').value) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 }))
 $('auto').addEventListener('click', () => {
-  if (!duel || !battling()) return
-  const before = duel.snapshot().log.length
-  while (!duel.snapshot().result) duel.auto()
-  showDuel(duel.snapshot().log.slice(before).slice(-3))
+  if (!duel || !battling() || playing()) return
+  void replayDuel(duel.snapshot().log.length, [], () => duel!.auto(), true)
 })
 $('key-set').addEventListener('click', () => {
   unlockAudio()
-  if (online) void challengeCurrent()
+  if (playing()) skipPlayback()
+  else if (online) void challengeCurrent()
   else startBattle()
 })
 
@@ -781,6 +870,7 @@ function resetAll(message = 'カードを読み込んでください') {
 }
 $('key-onoff').addEventListener('click', () => {
   unlockAudio()
+  skipPlayback()
   resetAll()
   const lcd = $('lcd')
   lcd.classList.remove('boot')
@@ -789,19 +879,20 @@ $('key-onoff').addEventListener('click', () => {
   beep(990, 0.2)
 })
 function setMode(next: Mode) {
-  if (battling() || next === mode) return
+  if (battling() || playing() || next === mode) return
   clearDuel()
   mode = next
   campaign = null
   guardianStar = undefined
   updateCampaignStatus()
   if (target === 'enemy' && mode !== 'C2') setTarget('left')
-  status(`${MODE_NAMES[mode]}（${mode}）${mode === 'C0' ? ' — 1Pと2Pを読み込んでSET' : ' — 1Pに戦士を読み込んでSET'}`)
+  status(`${MODE_NAMES[mode]}（${mode}）${mode === 'C0' ? ' — 1Pと2Pを読み込んでSET' : ' — 1Pに職業が戦士のキャラカードを読み込んでSET'}`)
   beep(1320)
   render()
 }
 $('key-select').addEventListener('click', () => {
   unlockAudio()
+  if (playing()) return
   // SELECT cycles C0 → C1 → C2 → 勝ち抜き部屋 → C0.
   if (online) { setOnline(false); setMode('C0'); return }
   if (mode === 'C2') { setOnline(true); return }
@@ -833,7 +924,7 @@ $('sample').addEventListener('click', async () => {
 })
 
 function startCampaign() {
-  if (!slots.left) { status('先に1Pへ戦士のカードを読み込んでください'); return }
+  if (!slots.left) { status('先に1Pへ職業が戦士のキャラカードを読み込んでください'); return }
   try {
     const campaignMode = mode as 'C1' | 'C2'
     const rawEnemy = $<HTMLInputElement>('enemy-barcode').value.trim()
@@ -854,7 +945,7 @@ function startCampaign() {
       // A warrior in 2P is a common mistake; start solo instead of refusing.
       if (!magician || !(error instanceof Error) || !/wrong job|Invalid partner|not a hero/.test(error.message)) throw error
       campaign = build(undefined)
-      note = '（2Pは魔法使いではないため、主人公1人で開始）'
+      note = '（2Pのキャラは職業が魔法使いではないため、1人で開始）'
     }
     slots.left = campaign.hero
     slots.right = campaignEnemy(campaign)
@@ -1042,6 +1133,35 @@ function fromChampionView(line: string) {
   if (line.includes('claims the empty room')) return '空き部屋に入りました'
   return line.replace(/^([12])P/, (_, n) => n === '1' ? '2P' : '1P')
 }
+/**
+ * Rebuild per-action HP from the Worker log. Start HP is derived backwards from
+ * the final HP, so opening debuffs (specials 28/29) still end on the true result.
+ */
+function roomFrames(lines: string[], challenger: Fighter, champion: Fighter | null, finalHp: { left: number; right: number }): Frame[] {
+  const actions: string[][] = []
+  for (const line of lines) {
+    if (/^[12]P (攻撃|MISS|回復|F\d)/.test(line) || actions.length === 0) actions.push([line])
+    else actions[actions.length - 1].push(line)
+  }
+  const delta = (side: Side, group: string[]) => group.reduce((sum, line) => {
+    const hit = /^([12])P 攻撃 (\d+)/.exec(line), heal = /^([12])P 回復 (\d+)/.exec(line)
+    const owner = (n: string): Side => n === '1' ? 'left' : 'right'
+    if (hit && owner(hit[1]) !== side) return sum - Number(hit[2])
+    if (heal && owner(heal[1]) === side) return sum + Number(heal[2])
+    return sum
+  }, 0)
+  const hp = { left: finalHp.left, right: finalHp.right }
+  for (const group of actions) { hp.left -= delta('left', group); hp.right -= delta('right', group) }
+  const at = (fighter: Fighter | null, value: number, max: number) => fighter && { ...fighter, maxHp: max, hp: Math.max(0, Math.min(max, value)) }
+  const maxLeft = Math.max(challenger.hp, hp.left), maxRight = champion ? Math.max(champion.hp, hp.right) : 0
+  const frames: Frame[] = []
+  for (const group of actions) {
+    hp.left += delta('left', group); hp.right += delta('right', group)
+    frames.push({ left: at(challenger, hp.left, maxLeft), right: at(champion, hp.right, maxRight), lines: group, attacker: attackerOf(group) })
+  }
+  frames.push({ left: at(challenger, finalHp.left, maxLeft), right: at(champion, finalHp.right, maxRight), lines: [] })
+  return frames
+}
 async function challengeCurrent() {
   const room = currentRoom()
   const fighter = challenger()
@@ -1064,6 +1184,11 @@ async function challengeCurrent() {
       `/api/rooms/${encodeURIComponent(room.id)}/challenge`, { barcode: fighter.barcode })
     const lines = (result.battle?.log || []).map(fromChampionView)
     log(lines)
+    if (result.battle && championBefore) {
+      status('バトル開始！（SETでスキップ）')
+      sweepLeds('both')
+      await play(roomFrames(lines, fighter, championBefore, { left: result.battle.rightHp, right: result.battle.leftHp }))
+    }
     if (result.battle) {
       roomFight = {
         roomId: room.id,
@@ -1072,8 +1197,6 @@ async function challengeCurrent() {
         winner: result.battle.winner === 'right' ? 'left' : 'right',
       }
     }
-    flashIndicators(indicatorsFor(lines.slice(-2)))
-    sweepLeds('both')
     beep(roomFight?.winner === 'left' ? 1760 : 440, 0.35)
     status(`${translate(result.message)}${lines.length > 1 ? `（${lines.length - 1}手）` : ''}`)
   } catch (error) { status(errorMessage(error)) }

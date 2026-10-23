@@ -43,7 +43,17 @@ export interface DecodeOptions {
   rng?: () => number
 }
 
-const races = ['種族0', '種族1', '種族2', '種族3', '種族4']
+/** Race and job labels from https://barcodebattler.net/page01.htm (種族・職業). */
+export const RACE_NAMES: readonly string[] = Object.freeze([
+  '機械族', 'アニマル族', '魚族', 'バード族', 'ヒューマン族',
+  '武器（使い捨て）', '武器', '防具（使い捨て）', '防具', 'HPアップ',
+])
+export const jobName = (job: number) => job <= 6 ? '戦士' : '魔法使い'
+/** Race 9 pre-read cards also carry info, herb and MP cards (BarcodeRead.as). */
+function itemName(f: Pick<Fighter, 'race' | 'job'>) {
+  if (f.race !== 9) return RACE_NAMES[f.race]
+  return f.job === 5 || f.job === 6 ? '情報カード' : f.job === 7 ? '薬草アップ' : f.job >= 8 ? 'MPアップ' : RACE_NAMES[9]
+}
 const randomInt = (rng: () => number, n: number) => {
   const value = rng()
   if (!Number.isFinite(value) || value < 0 || value >= 1) throw new Error('RNG must return a number in [0, 1)')
@@ -153,8 +163,7 @@ export function decodeBarcode(barcode: string, options: DecodeOptions = {}): Fig
     }
     if (options.job === 'warrior' && f.job > 6 || options.job === 'magician' && f.job <= 6) throw new Error('Card has the wrong job')
   }
-  f.name = f.kind === 'fighter' ? `${races[f.race]}・${f.job <= 6 ? '戦士' : '魔法使い'}` :
-    f.race <= 6 ? '武器' : f.race <= 8 ? '防具' : f.job === 7 ? '薬草' : f.job >= 8 ? 'MPアイテム' : f.job >= 5 ? '情報カード' : 'HPアイテム'
+  f.name = f.kind === 'fighter' ? `${RACE_NAMES[f.race]}・${jobName(f.job)}` : itemName(f)
   f.hp *= 100
   f.attack *= 100
   f.defense *= 100
