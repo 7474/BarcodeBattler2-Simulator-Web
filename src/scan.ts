@@ -101,11 +101,24 @@ async function createWasmDetector(): Promise<CodeDetector> {
     import('zxing-wasm/reader/zxing_reader.wasm?url'),
   ])
   // The wasm binary has to match the zxing-wasm version bundled with barcode-detector.
-  prepareZXingModule({
+  // Instantiate eagerly: a lazy failure (e.g. a CSP without 'wasm-unsafe-eval')
+  // would otherwise reject every frame silently and the camera would never read.
+  const ready = prepareZXingModule({
     overrides: {
       locateFile: (path: string, prefix: string) => path.endsWith('.wasm') ? wasm.default : `${prefix}${path}`,
     },
+    fireImmediately: true,
   })
+  let timer = 0
+  try {
+    await Promise.race([ready, new Promise<never>((_, reject) => {
+      timer = window.setTimeout(() => reject(new Error('timeout')), 15000)
+    })])
+  } catch {
+    throw new Error('このブラウザではバーコード読み取り機能を準備できませんでした。数字を入力してください。')
+  } finally {
+    window.clearTimeout(timer)
+  }
   return new BarcodeDetector({ formats: [...RETAIL_FORMATS] })
 }
 
