@@ -1,6 +1,8 @@
+import '@fontsource/libre-barcode-ean13-text/400.css'
 import './style.css'
 import { createBattle, combineFighters, decodeBarcode, jobName, MAGIC_COSTS, RACE_NAMES, type BattleAction, type BattleSession, type Fighter } from './game.ts'
 import { campaignEnemy, createCampaign, finishCampaignBattle, selectCampaignWorld, setCampaignEnemy, switchCampaignHero, type Campaign } from './campaign.ts'
+import { beep, playTones, setSoundEnabled, soundEnabled, SOUNDS, unlockAudio, type Tone } from './sound.ts'
 import { cameraErrorMessage, interpretScan, requestBarcodeCamera, startBarcodeCamera, type CameraSession } from './scan.ts'
 
 type Product = {
@@ -25,6 +27,7 @@ const SLOT_NAMES: Record<string, string> = { left: '1P', right: '2P', 'left-card
 const SEGMENTS: Record<string, string> = {
   '0': 'abcdef', '1': 'bc', '2': 'abged', '3': 'abgcd', '4': 'fgbc', '5': 'afgcd',
   '6': 'afgedc', '7': 'abc', '8': 'abcdefg', '9': 'abcdfg', '-': 'g', ' ': '',
+  '=': 'gd', E: 'adefg', n: 'ceg', d: 'bcdeg', F: 'aefg',
 }
 const horizontal = (x1: number, x2: number, y: number, t = 1.8) =>
   `${x1},${y} ${x1 + t / 2},${y - t / 2} ${x2 - t / 2},${y - t / 2} ${x2},${y} ${x2 - t / 2},${y + t / 2} ${x1 + t / 2},${y + t / 2}`
@@ -137,6 +140,11 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </section>
 
   <section class="console" aria-label="操作パネル">
+    <div class="settings" role="group" aria-label="演出の設定">
+      <label>演出<select id="fx-mode"><option value="standard">標準</option><option value="device">実機再現（液晶・ビープ音）</option></select></label>
+      <label>バトル速度<select id="speed"><option value="0.5">ゆっくり</option><option value="1">ふつう（実機）</option><option value="2">はやい</option><option value="4">最速</option></select></label>
+      <label>音<select id="sound"><option value="on">ON</option><option value="off">OFF</option></select></label>
+    </div>
     <nav class="tabs" aria-label="画面"><button id="local-tab" type="button" aria-pressed="true">ローカル対戦</button><button id="rooms-tab" type="button" aria-pressed="false">勝ち抜き部屋</button></nav>
     <div id="local-controls">
       <div class="modes" role="group" aria-label="ゲームモード">
@@ -208,7 +216,15 @@ let session: Promise<unknown> | undefined
 let cameraAbort: AbortController | undefined
 let cameraSession: CameraSession | undefined
 let torchOn = false
-let audio: AudioContext | undefined
+const SETTINGS_KEY = 'bb2-settings'
+let fxMode: 'standard' | 'device' = 'standard'
+let speed = 1
+try {
+  const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') as { fx?: string; speed?: number; sound?: boolean }
+  if (saved.fx === 'device') fxMode = 'device'
+  if (saved.speed && [0.5, 1, 2, 4].includes(saved.speed)) speed = saved.speed
+  if (saved.sound === false) setSoundEnabled(false)
+} catch { /* Settings are a per-viewer convenience. */ }
 let rooms: Room[] = []
 let roomIndex = 0
 let roomFight: RoomFight | null = null
@@ -272,24 +288,10 @@ function log(lines: string[]) {
     return li
   }))
 }
-function unlockAudio() {
-  try {
-    audio ??= new AudioContext()
-    void audio.resume()
-  } catch { /* Sound is optional. */ }
-}
-function beep(frequency = 1760, length = 0.08) {
-  if (!audio) return
-  const now = audio.currentTime
-  const osc = audio.createOscillator()
-  const gain = audio.createGain()
-  osc.type = 'square'
-  osc.frequency.setValueAtTime(frequency, now)
-  gain.gain.setValueAtTime(0.04, now)
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + length)
-  osc.connect(gain).connect(audio.destination)
-  osc.start(now)
-  osc.stop(now + length)
+/** Device mode plays the measured piezo pattern; standard mode keeps the simple beep. */
+function sfx(sound: readonly Tone[], frequency: number, length?: number) {
+  if (fxMode === 'device') playTones(sound, 1 / speed)
+  else beep(frequency, length)
 }
 /** Light LCD flags briefly, like the handheld does after each action. */
 function flashIndicators(next: Indicator[]) {
@@ -388,51 +390,213 @@ function canChallenge() {
   return online && !busy && !!challenger() && !!room && !roomRestriction(room, challenger())
 }
 type Frame = { left: Fighter | null; right: Fighter | null; lines: string[]; attacker?: Side }
-let playback: { frames: Frame[]; index: number; timer: number; finish: () => void } | null = null
+type Token = { skipped: boolean; wake: () => void }
+type RowText = { hp?: string; st?: string; df?: string }
+/** LCD state for the current animation tick; omitted fields show the live values. */
+type LcdOverride = {
+  left?: RowText; right?: RowText; damageLabel?: boolean; leds?: number | null
+  flags?: Partial<Record<Indicator, boolean>>; item?: boolean
+}
+type Action = { side: Side; kind: 'attack' | 'miss' | 'heal' | 'status'; amount: number; critical: boolean; broken: { side: Side; stat: 'st' | 'df' }[]; spell?: number }
+let playback: { frames: Frame[]; index: number; token: Token } | null = null
+let lcdOverride: LcdOverride | null = null
 function playing() { return !!playback }
+const otherSide = (side: Side): Side => side === 'left' ? 'right' : 'left'
+const ledOf = (side: Side) => side === 'left' ? 0 : 4
 function attackerOf(lines: string[]): Side | undefined {
   const match = lines.map(line => /^([12])P (攻撃|MISS|F[12])/.exec(line)).find(Boolean)
   return match ? (match[1] === '1' ? 'left' : 'right') : undefined
 }
-function showFrame(frame: Frame, last: boolean) {
+function parseAction(lines: string[]): Action | null {
+  let action: Action | null = null
+  for (const line of lines) {
+    const match = /^([12])P (.+)$/.exec(line)
+    if (!match) continue
+    const side: Side = match[1] === '1' ? 'left' : 'right'
+    const text = match[2]
+    const base = { side, amount: 0, critical: false, broken: [] }
+    if (text.startsWith('攻撃 ')) action = { ...base, kind: 'attack', amount: Number(text.slice(3)) }
+    else if (text === 'MISS') action = { ...base, kind: 'miss' }
+    else if (text.startsWith('回復 ')) action = { ...base, kind: 'heal', amount: Number(text.slice(3)) }
+    else if (/^F\d$/.test(text)) action = { ...base, kind: 'status', spell: Number(text[1]) }
+    else if (text === 'CRITICAL' && action) action.critical = true
+    else if (text.endsWith('破損') && action) action.broken.push({ side, stat: text.startsWith('武器') ? 'st' : 'df' })
+  }
+  return action
+}
+function sleep(ms: number, token: Token) {
+  return new Promise<void>(resolve => {
+    if (token.skipped) { resolve(); return }
+    const timer = window.setTimeout(done, ms / speed)
+    function done() { window.clearTimeout(timer); token.wake = () => {}; resolve() }
+    token.wake = done
+  })
+}
+/** Run `count` ticks of `ms` (divided by the battle speed), redrawing the LCD on each. */
+async function ticks(count: number, ms: number, token: Token, draw: (tick: number) => void) {
+  for (let tick = 1; tick <= count && !token.skipped; tick++) {
+    draw(tick)
+    renderLcd()
+    renderLeds()
+    await sleep(ms, token)
+  }
+}
+const tones = (sound: readonly Tone[]) => playTones(sound, 1 / speed)
+const pad = (text: string) => text.padEnd(5)
+
+/**
+ * Device mode: the handheld's attack sequence as implemented by
+ * finalfighter/BarcodeBattler2-Simulator (barcode2.as battle/power animations),
+ * on 40 ms / 80 ms ticks: LEDs run toward the defender while a dash moves on
+ * the attacker's HP row, then the damage blinks there with CRITICAL / MISS.
+ */
+async function animateAction(state: { frames: Frame[]; index: number }, index: number, token: Token) {
+  const prev = state.frames[index - 1], next = state.frames[index]
+  const action = parseAction(next.lines)
+  state.index = index - 1
+  if (!action) { state.index = index; return }
+  const other = otherSide(action.side)
+  if (action.kind === 'heal' || action.spell === 3 || action.spell === 4) {
+    const amount = action.kind === 'heal' ? action.amount : Math.max(0, (next[action.side]?.hp ?? 0) - (prev[action.side]?.hp ?? 0))
+    tones(SOUNDS.power)
+    await ticks(40, 80, token, tick => {
+      lcdOverride = { flags: { power: true, battle: false }, [other]: { hp: tick <= 20 ? (tick % 2 === 0 ? pad(' ==') : '') : String(amount), st: '', df: '' } }
+    })
+  } else if (action.kind === 'status') {
+    tones(SOUNDS.statusDown)
+    await ticks(8, 250, token, tick => {
+      lcdOverride = { flags: { battle: true }, [action.side]: { hp: tick % 2 ? `F${action.spell}` : '', st: '', df: '' } }
+    })
+  } else {
+    const hit = action.kind === 'attack'
+    const total = !hit ? 130 : action.critical ? 90 : 110
+    const sweep = !hit ? 80 : action.critical ? 40 : 60
+    const dashes = action.side === 'left' ? ['-', ' -', '  -'] : ['  -', ' -', '-']
+    await ticks(total, 40, token, tick => {
+      const count = tick % 10
+      if (count === 1 && tick <= sweep) tones(!hit ? SOUNDS.miss : action.critical ? SOUNDS.critical : SOUNDS.hit)
+      if (tick <= sweep) {
+        const led = Math.floor(count / 2)
+        lcdOverride = {
+          damageLabel: true, flags: { battle: true }, leds: action.side === 'left' ? led : 4 - led,
+          [action.side]: { hp: count === 9 ? '' : pad(dashes[Math.floor(count / 3)]), st: '', df: '' },
+        }
+      } else {
+        const on = count <= 4
+        lcdOverride = {
+          damageLabel: true, leds: null, flags: { battle: true, critical: on && action.critical, miss: on && !hit },
+          [action.side]: { hp: on ? String(action.amount) : '', st: '', df: '' },
+        }
+      }
+    })
+  }
+  state.index = index
+  for (const broken of action.broken) {
+    tones(SOUNDS.statusDown)
+    await ticks(10, 250, token, tick => { lcdOverride = { [broken.side]: { [broken.stat]: tick % 2 ? '' : undefined } } })
+  }
+  const finished = !next.left?.hp || !next.right?.hp
+  lcdOverride = { leds: finished ? null : ledOf(other) }
+  if (!finished) tones(SOUNDS.change)
+  renderLcd(); renderLeds()
+  await sleep(300, token)
+}
+/** Device mode: the loser's HP blinks 0, then "End" (battle_end_animation). */
+async function animateEnd(final: Frame, token: Token) {
+  const loser: Side | null = final.left && final.left.hp <= 0 ? 'left' : final.right && final.right.hp <= 0 ? 'right' : null
+  if (!loser) return
+  tones(SOUNDS.end)
+  await ticks(10, 120, token, tick => { lcdOverride = { [loser]: tick % 2 ? { hp: '', st: '', df: '' } : { hp: '0' } } })
+  await ticks(8, 150, token, tick => { lcdOverride = { [loser]: { hp: tick % 2 ? 'End' : '', st: '', df: '' } } })
+}
+function showFrame(frame: Frame) {
   flashIndicators(indicatorsFor(frame.lines))
   if (frame.attacker) sweepLeds(frame.attacker)
   const text = summarize(frame.lines)
   if (frame.lines.length) beep(frame.lines.some(line => line.includes('MISS')) ? 440 : frame.lines.some(line => line.includes('CRITICAL')) ? 2200 : 1760)
-  if (text && !last) status(`${text}（SETでスキップ）`)
+  if (text) status(`${text}（SETでスキップ）`)
   render()
 }
 /**
  * Replay a finished battle action by action so it is not just a result.
- * SET (or a tap on the LCD) skips to the end. Resolves once the last frame shows.
+ * frames[0] is the state before the first action. SET (or a tap on the LCD)
+ * skips to the end; the promise resolves once the replay stops.
  */
-function play(frames: Frame[]): Promise<void> {
+async function play(frames: Frame[]) {
   skipPlayback()
-  if (frames.length === 0) return Promise.resolve()
-  return new Promise(resolve => {
-    const interval = Math.max(140, Math.min(750, 750 * 30 / frames.length))
-    const state = { frames, index: 0, timer: 0, finish: () => {} }
-    const step = () => {
-      const frame = state.frames[state.index]
-      const last = state.index === state.frames.length - 1
-      if (last) { state.finish(); return }
-      showFrame(frame, false)
-      state.index++
-      state.timer = window.setTimeout(step, interval)
+  if (frames.length < 2) return
+  const token: Token = { skipped: false, wake: () => {} }
+  const state = { frames, index: 0, token }
+  playback = state
+  render()
+  try {
+    if (fxMode === 'device') {
+      for (let index = 1; index < frames.length && !token.skipped; index++) {
+        const action = parseAction(frames[index].lines)
+        if (action) status(`${summarize(frames[index].lines.slice(0, 1)).replace(/ (MISS|\d+ダメージ)$/, ' …')}（SETでスキップ）`)
+        await animateAction(state, index, token)
+        if (action && !token.skipped) status(`${summarize(frames[index].lines)}（SETでスキップ）`)
+      }
+      if (!token.skipped) await animateEnd(frames[frames.length - 1], token)
+    } else {
+      const interval = Math.max(140, Math.min(750, 750 * 30 / frames.length))
+      for (let index = 1; index < frames.length && !token.skipped; index++) {
+        state.index = index
+        if (!parseAction(frames[index].lines)) continue
+        showFrame(frames[index])
+        if (index < frames.length - 1) await sleep(interval, token)
+      }
     }
-    state.finish = () => {
-      window.clearTimeout(state.timer)
-      playback = null
-      state.index = state.frames.length - 1
-      flashIndicators(indicatorsFor(state.frames[state.index].lines))
-      resolve()
-    }
-    playback = state
-    step()
-  })
+  } finally {
+    if (playback === state) { playback = null; lcdOverride = null }
+    flashIndicators(indicatorsFor([...frames].reverse().find(frame => frame.lines.length)?.lines ?? []))
+  }
 }
-function skipPlayback() { playback?.finish() }
+function skipPlayback() {
+  if (!playback) return
+  playback.token.skipped = true
+  playback.token.wake()
+}
 $('lcd').addEventListener('click', skipPlayback)
+/** Card reader: the slot's rows blink "==" (card_insert_animation), then a second card shows its values. */
+async function animateCardIn(blink: Side, item: Fighter | null) {
+  skipPlayback()
+  const token: Token = { skipped: false, wake: () => {} }
+  const state = { frames: [{ left: slots.left, right: slots.right, lines: [] }], index: 0, token }
+  playback = state
+  render()
+  tones(SOUNDS.power)
+  try {
+    await ticks(20, 80, token, tick => {
+      const text = tick % 2 ? pad(' ==') : ''
+      lcdOverride = { flags: { card: false }, [blink]: { hp: text, st: text, df: text } }
+    })
+    if (item) {
+      const value = (n: number) => n ? String(Math.min(n, 19900)) : ''
+      await ticks(20, 80, token, () => {
+        lcdOverride = { flags: { card: false }, item: true, [blink]: { hp: item.hp ? String(item.hp) : '', st: value(item.attack), df: value(item.defense) } }
+      })
+    }
+  } finally {
+    if (playback === state) { playback = null; lcdOverride = null }
+  }
+}
+/** Card rejected: CARD IN and MISS alternate (card_insert_error_animation). */
+async function animateCardError(isItem: boolean) {
+  skipPlayback()
+  const token: Token = { skipped: false, wake: () => {} }
+  const state = { frames: [{ left: slots.left, right: slots.right, lines: [] }], index: 0, token }
+  playback = state
+  tones(SOUNDS.error)
+  try {
+    await ticks(6, 150, token, tick => {
+      lcdOverride = { flags: { card: tick % 2 === 1 || isItem, miss: tick % 2 === 0 }, item: isItem && tick % 2 === 1 }
+    })
+  } finally {
+    if (playback === state) { playback = null; lcdOverride = null }
+    render()
+  }
+}
 
 function lcdSides(): { left: Fighter | null; right: Fighter | null } {
   if (playback) { const frame = playback.frames[playback.index]; return { left: frame.left, right: frame.right } }
@@ -444,13 +608,16 @@ function lcdSides(): { left: Fighter | null; right: Fighter | null } {
 
 function renderLcd() {
   const sides = lcdSides()
-  const value = (fighter: Fighter | null, key: 'hp' | 'attack' | 'defense') => fighter ? String(fighter[key]) : ''
+  const o = lcdOverride
+  const field = { hp: 'hp', attack: 'st', defense: 'df' } as const
+  const live = (fighter: Fighter | null, key: 'hp' | 'attack' | 'defense') => fighter ? String(fighter[key]) : ''
+  const value = (side: Side, key: 'hp' | 'attack' | 'defense') => o?.[side]?.[field[key]] ?? live(sides[side], key)
   const rows: [string, string, 'hp' | 'attack' | 'defense'][] = [['HP', 'DAMAGE', 'hp'], ['ST', 'MP', 'attack'], ['DF', 'PP', 'defense']]
   $('lcd-stats').innerHTML = rows.map(([label, small, key]) => `
     <div class="stat-row">
-      ${segments(value(sides.left, key), 5)}
-      <span class="stat-label"><b>${label}</b><small class="${small === 'DAMAGE' && lit.has('damage') ? 'on' : ''}">${small}</small></span>
-      ${segments(value(sides.right, key), 5)}
+      ${segments(value('left', key), 5)}
+      <span class="stat-label"><b class="${o?.damageLabel ? 'off' : ''}">${label}</b><small class="${small === 'DAMAGE' && (o?.damageLabel || lit.has('damage')) ? 'on' : ''}">${small}</small></span>
+      ${segments(value('right', key), 5)}
     </div>`).join('') + `
     <div class="stat-row mini">
       <span class="mini-pair"><small>MP</small>${segments(sides.left ? String(sides.left.mp) : '', 2)}<small>PP</small>${segments(sides.left ? String(sides.left.pp) : '', 2)}</span>
@@ -471,6 +638,7 @@ function renderLcd() {
     power: lit.has('power'),
     miss: lit.has('miss'),
     damage: lit.has('damage'),
+    ...o?.flags,
   }
   document.querySelectorAll<HTMLElement>('[data-ind]').forEach(flag => {
     flag.classList.toggle('on', flags[flag.dataset.ind as Indicator])
@@ -482,7 +650,7 @@ function renderLcd() {
   }
   job('left', 'war'); job('left', 'mag'); job('right', 'war'); job('right', 'mag')
   $('ic-key').classList.toggle('on', !!campaign && campaign.mode === 'C1' && campaign.keys.length < 3)
-  $('ic-item').classList.toggle('on', !online && combined.size > 0)
+  $('ic-item').classList.toggle('on', o?.item ?? (!online && combined.size > 0))
   $('ic-info').classList.toggle('on', false)
   $('lcd-mode').textContent = online ? 'VS' : mode
 }
@@ -491,6 +659,11 @@ function renderLeds() {
   const leds = [...$('leds').children] as HTMLElement[]
   const snapshot = duel?.snapshot()
   leds.forEach(led => led.classList.remove('on', 'win'))
+  if (lcdOverride && 'leds' in lcdOverride) {
+    if (lcdOverride.leds != null) leds[lcdOverride.leds].classList.add('on')
+    return
+  }
+  if (playback) return
   if (online) {
     if (roomFight && roomFight.roomId === currentRoom()?.id) leds[roomFight.winner === 'left' ? 0 : 4].classList.add('on', 'win')
     return
@@ -502,6 +675,16 @@ function renderLeds() {
   } else leds[snapshot.turn === 'left' ? 0 : 4].classList.add('on')
 }
 
+/** Render a JAN/EAN with the Libre Barcode EAN13 Text font (bars and digits). */
+function appendBarcode(parent: HTMLElement, code: string) {
+  if (!/^(\d{8}|\d{13})$/.test(code) || /^0+$/.test(code)) return
+  const element = document.createElement('span')
+  element.className = 'barcode'
+  element.textContent = code
+  element.setAttribute('role', 'img')
+  element.setAttribute('aria-label', `バーコード ${code}`)
+  parent.append(element)
+}
 /** The second card's own label (e.g. 武器（使い捨て）, 薬草アップ). */
 function secondName(side: Side, race: number) {
   const code = secondCards.get(side)
@@ -547,7 +730,7 @@ function renderCards() {
     const text = document.createElement('div')
     const label = document.createElement('p')
     label.className = 'product-name'
-    label.textContent = product?.name || (fighter.barcode === '0000000000000' ? 'シナリオの敵' : fighter.barcode)
+    label.textContent = product?.name || (fighter.barcode === '0000000000000' ? 'シナリオの敵' : '')
     const kind = document.createElement('p')
     kind.className = 'kind'
     const fused = combined.has(side) && fighter.race2 !== undefined
@@ -556,7 +739,10 @@ function renderCards() {
     const stats = document.createElement('p')
     stats.className = 'stats'
     stats.textContent = `HP ${fighter.hp} / ST ${fighter.attack} / DF ${fighter.defense} / 速さ ${fighter.speed} / MP ${fighter.mp} / 薬草 ${fighter.pp}`
-    text.append(label, kind, stats)
+    const codes = document.createElement('div')
+    codes.className = 'barcodes'
+    for (const code of [fighter.barcode, secondCards.get(side)]) if (code) appendBarcode(codes, code)
+    text.append(...(label.textContent ? [label] : []), codes, kind, stats)
     body.append(text)
     card.append(body)
     appendAmazonLinks(card, product)
@@ -628,7 +814,7 @@ async function loadBarcode(barcode: string) {
       status(interpreted.reason === 'checksum'
         ? 'チェックデジットが一致しません。桁と数字を確認してください。'
         : '8桁または13桁のJAN/EANを読み取ってください。')
-      beep(220, 0.25)
+      void animateCardError(false)
       return
     }
     if (battling()) throw new Error('バトル中はカードを読み込めません。決着後に読み込んでください。')
@@ -641,9 +827,10 @@ async function loadBarcode(barcode: string) {
         campaign = setCampaignEnemy(campaign, fighter.barcode)
         slots.right = campaignEnemy(campaign)
         updateCampaignStatus()
-        status(`C2の敵を読み込みました。SETでバトル開始`)
-      } else status(`C2の敵を設定しました ${fighter.barcode}`)
-      beep()
+      }
+      status('C2の敵を読み込み中…')
+      await animateCardIn('right', null)
+      status(campaign?.mode === 'C2' ? 'C2の敵を読み込みました。SETでバトル開始' : `C2の敵を設定しました ${fighter.barcode}`)
       render()
       return
     }
@@ -682,21 +869,27 @@ async function loadBarcode(barcode: string) {
     const loaded = isCard ? `${side === 'left' ? '1P' : '2P'}に${fighter.name}を合体` : `${SLOT_NAMES[side]} ${fighter.name} 読み込み完了`
     const next = online ? (canChallenge() ? ' — SETで挑戦' : ` — ${roomRestriction(currentRoom(), challenger())}`)
       : slots.left && slots.right && mode === 'C0' ? ' — SETでバトル開始' : ''
-    status(`${loaded}${next}`)
     flashIndicators([])
-    render()
-    beep()
     $<HTMLInputElement>('barcode').value = ''
-    try {
-      await ensureSession()
-      const result = await api<{ product: Product | null; amazonAffiliateEnabled: boolean }>(`/api/products/${fighter.barcode}`)
-      $('amazon-disclosure').hidden = !result.amazonAffiliateEnabled
-      if (result.product) products.set(fighter.barcode, result.product)
-      render()
-    } catch { /* Product lookup must not prevent local play. */ }
+    const lookup = (async () => {
+      try {
+        await ensureSession()
+        const result = await api<{ product: Product | null; amazonAffiliateEnabled: boolean }>(`/api/products/${fighter.barcode}`)
+        $('amazon-disclosure').hidden = !result.amazonAffiliateEnabled
+        if (result.product) products.set(fighter.barcode, result.product)
+      } catch { /* Product lookup must not prevent local play. */ }
+    })()
+    status(`${SLOT_NAMES[isCard ? `${side}-card` : side]} 読み込み中…`)
+    // A second card shows its own values on the opposite rows, as the handheld does.
+    await animateCardIn(isCard ? otherSide(side) : side, isCard ? fighter : null)
+    status(`${loaded}${next}`)
+    render()
+    await lookup
+    render()
   } catch (error) {
-    status(errorMessage(error))
-    beep(220, 0.25)
+    const message = errorMessage(error)
+    status(message)
+    void animateCardError(/アイテム/.test(message))
   }
 }
 
@@ -717,7 +910,7 @@ function startBattle() {
     campaignDuelResolved = false
     flashIndicators([])
     sweepLeds('both')
-    beep(1320, 0.18)
+    sfx(SOUNDS.decide, 1320, 0.18)
     if (campaign && duel.snapshot().turn === 'right' && !duel.snapshot().result) {
       // The enemy moves first: show the opening state, then replay its attack.
       const from = duel.snapshot().log.length
@@ -748,7 +941,7 @@ function showDuel(newLines: string[]) {
   if (snapshot.result) {
     const winner = snapshot.result.winner === 'left' ? (campaign ? '主人公' : '1P') : (campaign ? '敵' : '2P')
     status(`${winner} WIN! — ${snapshot.rounds}手で決着`)
-    beep(880, 0.35)
+    if (fxMode !== 'device') beep(880, 0.35)
   } else {
     const who = snapshot.turn === 'left' ? (campaign ? '主人公' : '1P') : (campaign ? '敵' : '2P')
     const button = snapshot.turn === 'left' ? 'L' : 'R'
@@ -784,21 +977,25 @@ function summarize(lines: string[]) {
   return parts.join(' / ')
 }
 function act(action: BattleAction) {
-  if (!duel) return
+  if (!duel || playing()) return
   unlockAudio()
   try {
     const before = duel.snapshot().log.length
     const attacker = duel.snapshot().turn
+    const start = snapshotFrame(before)
     duel.act(action)
-    if (!campaign || duel.snapshot().turn !== 'right' || duel.snapshot().result) {
+    const cpuReplies = !!campaign && duel.snapshot().turn === 'right' && !duel.snapshot().result
+    if (fxMode === 'device' || cpuReplies) {
+      // Replay this action (and the CPU enemy's immediate answer) on the LCD.
+      void replayDuel(before, [start, snapshotFrame(before)], cpuReplies ? () => duel!.auto() : null)
+      return
+    }
+    {
       const lines = duel.snapshot().log.slice(before)
       if (action.type === 'attack' || action.type === 'magic') sweepLeds(attacker)
       beep(lines.some(line => line.includes('MISS')) ? 440 : lines.some(line => line.includes('CRITICAL')) ? 2200 : 1760)
       showDuel(lines)
-      return
     }
-    // The CPU enemy answers right away; replay both actions so its move is visible.
-    void replayDuel(before, [snapshotFrame(before)], () => duel!.auto())
   } catch (error) { status(errorMessage(error)) }
 }
 function snapshotFrame(from: number): Frame {
@@ -807,14 +1004,13 @@ function snapshotFrame(from: number): Frame {
   return { left: snapshot.left, right: snapshot.right, lines, attacker: attackerOf(lines) }
 }
 /** Run `next` until it stops (or the battle ends), recording a frame per action, then replay them. */
-async function replayDuel(from: number, frames: Frame[], next: () => void, untilEnd = false) {
+async function replayDuel(from: number, frames: Frame[], next: (() => void) | null, untilEnd = false) {
   if (!duel) return
-  do {
+  if (next) do {
     const before = duel.snapshot().log.length
     next()
     frames.push(snapshotFrame(before))
   } while (untilEnd && !duel.snapshot().result)
-  frames.push({ ...frames[frames.length - 1], lines: [] })
   const session = duel
   await play(frames)
   // ON/OFF or a mode change during the replay discards this battle.
@@ -843,7 +1039,8 @@ $('heal').addEventListener('click', () => act({ type: 'herbs', amount: Number($<
 $('magic').addEventListener('click', () => act({ type: 'magic', spell: Number($<HTMLSelectElement>('spell').value) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 }))
 $('auto').addEventListener('click', () => {
   if (!duel || !battling() || playing()) return
-  void replayDuel(duel.snapshot().log.length, [], () => duel!.auto(), true)
+  const from = duel.snapshot().log.length
+  void replayDuel(from, [snapshotFrame(from)], () => duel!.auto(), true)
 })
 $('key-set').addEventListener('click', () => {
   unlockAudio()
@@ -876,7 +1073,7 @@ $('key-onoff').addEventListener('click', () => {
   lcd.classList.remove('boot')
   void lcd.offsetWidth
   lcd.classList.add('boot')
-  beep(990, 0.2)
+  sfx(SOUNDS.on, 990, 0.2)
 })
 function setMode(next: Mode) {
   if (battling() || playing() || next === mode) return
@@ -887,7 +1084,7 @@ function setMode(next: Mode) {
   updateCampaignStatus()
   if (target === 'enemy' && mode !== 'C2') setTarget('left')
   status(`${MODE_NAMES[mode]}（${mode}）${mode === 'C0' ? ' — 1Pと2Pを読み込んでSET' : ' — 1Pに職業が戦士のキャラカードを読み込んでSET'}`)
-  beep(1320)
+  sfx(SOUNDS.select, 1320)
   render()
 }
 $('key-select').addEventListener('click', () => {
@@ -1114,6 +1311,7 @@ function renderRoomList() {
     const regulation = document.createElement('p')
     regulation.textContent = room.barcodePrefix ? `レギュレーション: ${room.barcodePrefix}で始まるコード` : 'レギュレーション: 無差別'
     card.append(heading, regulation, description)
+    if (room.champion) appendBarcode(card, room.champion.barcode)
     appendAmazonLinks(card, product)
     card.append(button)
     return card
@@ -1197,7 +1395,7 @@ async function challengeCurrent() {
         winner: result.battle.winner === 'right' ? 'left' : 'right',
       }
     }
-    beep(roomFight?.winner === 'left' ? 1760 : 440, 0.35)
+    if (fxMode !== 'device') beep(roomFight?.winner === 'left' ? 1760 : 440, 0.35)
     status(`${translate(result.message)}${lines.length > 1 ? `（${lines.length - 1}手）` : ''}`)
   } catch (error) { status(errorMessage(error)) }
   finally {
@@ -1229,4 +1427,14 @@ const showUnit = () => document.querySelector('.bb2')?.scrollIntoView({ behavior
 $('local-tab').addEventListener('click', () => { setOnline(false); showUnit() })
 $('rooms-tab').addEventListener('click', () => { setOnline(true); showUnit() })
 $('refresh').addEventListener('click', () => void refreshRooms())
+const fxSelect = $<HTMLSelectElement>('fx-mode'), speedSelect = $<HTMLSelectElement>('speed'), soundSelect = $<HTMLSelectElement>('sound')
+fxSelect.value = fxMode
+speedSelect.value = String(speed)
+soundSelect.value = soundEnabled() ? 'on' : 'off'
+function saveSettings() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ fx: fxMode, speed, sound: soundEnabled() })) } catch { /* Not persisted. */ }
+}
+fxSelect.addEventListener('change', () => { fxMode = fxSelect.value === 'device' ? 'device' : 'standard'; saveSettings() })
+speedSelect.addEventListener('change', () => { speed = Number(speedSelect.value) || 1; saveSettings() })
+soundSelect.addEventListener('change', () => { setSoundEnabled(soundSelect.value === 'on'); unlockAudio(); saveSettings() })
 render()
