@@ -339,8 +339,11 @@ test('magician union MP is zero below the original ten-MP eligibility threshold'
   assert.equal(combine({ ...a, job: 6, mp: 10 }, b).mp, 0)
 })
 
-test('race labels are neutral rather than unverified character lore', () => {
-  assert.match(decodeBarcode(leftCode).name, /^種族4/)
+test('card labels follow the published race and job table', () => {
+  assert.equal(decodeBarcode(leftCode).name, 'ヒューマン族・戦士')
+  assert.equal(decodeBarcode('00000505').name, '武器（使い捨て）')
+  assert.equal(decodeBarcode('0501010970005').name, '薬草アップ')
+  assert.equal(decodeBarcode('0501010980004').name, 'MPアップ')
 })
 
 test('campaigns can retain a fixed guardian star without drawing another one', () => {
