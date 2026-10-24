@@ -95,11 +95,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <i class="vent vent-r" aria-hidden="true"></i>
         </div>
         <p id="status" class="message" role="status">カード待ち</p>
-        <div id="room-bar" class="room-bar" hidden>
-          <button id="room-prev" type="button" aria-label="前の部屋">◀</button>
-          <div class="room-now"><b id="room-name">部屋を読み込み中…</b><span id="room-info"></span></div>
-          <button id="room-next" type="button" aria-label="次の部屋">▶</button>
-        </div>
         <div class="leds" id="leds" aria-hidden="true">
           <span class="led"></span><span class="led"></span><span class="led"></span><span class="led"></span><span class="led"></span>
         </div>
@@ -110,13 +105,18 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <button id="r-battle" class="pill" type="button" disabled><span class="pill-cap"></span><span class="pill-label">R-BATTLE</span></button>
       </div>
     </div>
+    <div id="room-bar" class="room-bar" hidden>
+      <button id="room-prev" type="button" aria-label="前の部屋">◀</button>
+      <div class="room-now"><b id="room-name">部屋を読み込み中…</b><span id="room-holder"></span><span id="room-info"></span></div>
+      <button id="room-next" type="button" aria-label="次の部屋">▶</button>
+    </div>
     <div class="keys">
       <button id="key-onoff" class="key" type="button"><span class="key-label">ON/OFF</span><span class="key-cap"></span></button>
       <button id="key-select" class="key" type="button"><span class="key-label">SELECT</span><span class="key-cap"></span></button>
       <button id="key-set" class="key" type="button"><span class="key-label">SET</span><span class="key-cap"></span></button>
     </div>
     <div class="slot">
-      <div class="slot-mouth"><span>CARD IN</span><i class="arrow-r"></i></div>
+      <div class="slot-mouth"><span>CARD IN</span><i class="arrow-r"></i><button type="button" id="vs-fuse" class="mouth-toggle" aria-pressed="false" hidden>2枚目を合体</button></div>
       <div class="slot-targets" id="slot-targets" role="group" aria-label="読み込み先">
         <button type="button" data-slot="left" aria-pressed="true">1P</button>
         <button type="button" data-slot="right">2P</button>
@@ -414,7 +414,10 @@ function roomRestriction(room: Room | null, fighter: Fighter | null) {
   if (fighter && prefix && [fighter.barcode, challengerSecond()].some(code => code && !code.startsWith(prefix))) return `${prefix}で始まるカードだけ挑戦できます`
   return ''
 }
-/** One-line regulation summary for the room picker and list. */
+function shortRegulation(room: Room) {
+  return [room.barcodePrefix ? `${room.barcodePrefix}始まりのみ` : 'コード無差別', allowsSecond(room) ? '2枚目可' : 'キャラ1枚のみ', room.allowHeal === false ? '回復禁止' : ''].filter(Boolean).join('・')
+}
+/** One-line regulation summary for the room list. */
 function regulationText(room: Room) {
   return [
     room.barcodePrefix ? `${room.barcodePrefix}始まりのみ` : 'コード無差別',
@@ -830,8 +833,14 @@ function render() {
     button.hidden = online ? !['left', 'left-card'].includes(button.dataset.slot!) : button.dataset.slot === 'enemy' && mode !== 'C2'
   })
   // In VS only 1P reads cards; the target row matters only when a second card is allowed.
-  $('slot-targets').hidden = online && !allowsSecond(currentRoom())
+  // VS reads only 1P; the fusion toggle sits in the CARD IN bar and keeps its space
+  // in single-card rooms, so the unit height does not change between rooms.
+  $('slot-targets').hidden = online
   if (online && target !== 'left' && (target !== 'left-card' || !allowsSecond(currentRoom()))) setTarget('left')
+  const fuse = $<HTMLButtonElement>('vs-fuse')
+  fuse.hidden = !online
+  fuse.style.visibility = allowsSecond(currentRoom()) ? 'visible' : 'hidden'
+  fuse.setAttribute('aria-pressed', String(target === 'left-card'))
   document.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach(button => {
     button.setAttribute('aria-pressed', String(button.dataset.mode === mode))
     button.disabled = fighting
@@ -931,6 +940,7 @@ async function loadBarcode(barcode: string) {
     }
     guardianStar = undefined
     roomFight = null
+    if (online) setTarget('left')
     nextTargetAfter(side, isCard)
     const loaded = isCard ? `${side === 'left' ? '1P' : '2P'}に${fighter.name}を合体` : `${SLOT_NAMES[side]} ${fighter.name} 読み込み完了`
     const next = online && !canChallenge() ? ` — ${roomRestriction(currentRoom(), challenger())}` : ''
@@ -1162,6 +1172,10 @@ $('key-select').addEventListener('click', () => {
 document.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach(button => {
   button.addEventListener('click', () => setMode((button.dataset.mode || 'C0') as Mode))
 })
+$('vs-fuse').addEventListener('click', () => {
+  setTarget(target === 'left-card' ? 'left' : 'left-card')
+  render()
+})
 document.querySelectorAll<HTMLButtonElement>('[data-slot]').forEach(button => {
   button.addEventListener('click', () => {
     setTarget(button.dataset.slot || 'left')
@@ -1328,14 +1342,16 @@ function renderRoomBar() {
   $<HTMLButtonElement>('room-next').disabled = busy || rooms.length < 2
   if (!room) {
     $('room-name').textContent = '部屋を読み込み中…'
+    $('room-holder').textContent = ''
     $('room-info').textContent = ''
     return
   }
-  $('room-name').textContent = `${room.name}（${roomIndex + 1}/${rooms.length}）`
+  // Three fixed one-line rows, so switching rooms never changes the unit's height.
   const champion = room.champion
-  const holder = champion ? `王者 ${champion.product?.name || champion.barcode} ${champion.wins}連勝` : '王者なし — 勝てば王者'
-  const restriction = roomRestriction(room, challenger())
-  $('room-info').textContent = `${holder} / ${restriction || regulationText(room)}`
+  const line = (id: string, text: string) => { $(id).textContent = text; $(id).title = text }
+  line('room-name', `${room.name}（${roomIndex + 1}/${rooms.length}）`)
+  line('room-holder', champion ? `王者 ${champion.product?.name || champion.barcode} ${champion.wins}連勝` : '王者なし — 勝てば王者')
+  line('room-info', roomRestriction(room, challenger()) || shortRegulation(room))
 }
 function selectRoom(index: number) {
   if (busy || rooms.length === 0) return
