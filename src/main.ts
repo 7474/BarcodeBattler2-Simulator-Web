@@ -25,7 +25,6 @@ type Indicator = 'battle' | 'card' | 'escape' | 'critical' | 'power' | 'miss' | 
 const SPELLS = ['F0 MP吸収', 'F1 打撃・小', 'F2 打撃・大', 'F3 回復・小', 'F4 回復・大', 'F5 防御DOWN', 'F6 防御UP', 'F7 攻撃DOWN', 'F8 攻撃UP', 'F9 薬草封じ']
 const MODES: Mode[] = ['C0', 'C1', 'C2']
 const MODE_NAMES: Record<Mode, string> = { C0: 'フリーバトル', C1: '冒険 C1', C2: '挑戦 C2' }
-const SLOT_NAMES: Record<string, string> = { left: '1P', right: '2P', 'left-card': '1P 合体', 'right-card': '2P 合体', enemy: 'C2の敵' }
 
 // Seven-segment glyphs drawn as SVG polygons; no original artwork is used.
 const SEGMENTS: Record<string, string> = {
@@ -179,7 +178,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div id="campaign-controls" class="panel" hidden>
         <p id="campaign-status"></p>
         <div class="field-row">
-          <button id="switch-hero" type="button">主人公を交代</button>
+          <button id="switch-hero" type="button">戦士と魔法使いを交代</button>
           <button id="set-enemy" type="button">入力した敵に変更</button>
           <span id="world-controls"><select id="world" aria-label="C1ワールド"><option value="1">L-1</option><option value="2">L-2</option><option value="3">L-3</option><option value="4">L-4</option><option value="5">L-5</option><option value="H">L-H（鍵3個）</option></select><button id="set-world" type="button">ワールド移動</button></span>
         </div>
@@ -207,7 +206,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <section class="help"><details><summary>遊び方と注意</summary>
     <p>ボタンの役割は操作パネル上部の「操作ガイド」にまとめています。光っているボタンがいま操作できます。</p>
     <p>カードは種族0〜4がキャラカード（機械族・アニマル族・魚族・バード族・ヒューマン族）、5〜9がアイテムカード（武器・防具・HPアップ）です。職業0〜6は戦士、7〜9は魔法使いで、どちらになるかは読み込んだバーコードで決まります。</p>
-    <p>SELECT でモードを切り替えます。C1/C2 は 1P に職業が戦士のキャラカード、2P に職業が魔法使いのキャラカード（任意）を読み込んで SET。C2 は SET 後に「C2の敵」へ敵のキャラカードを読み込みます。アイテムカードは直前に読み込んだキャラカードに合体します。</p>
+    <p>SELECT でモードを切り替えます。C1/C2 は1人プレイです。CARD IN の読み込み先が「戦士」「魔法使い」に変わるので、戦士に職業0〜6のキャラカード、魔法使いに職業7〜9のキャラカード（任意）を読み込んで SET。C2 は SET 後に「C2の敵」へ敵のキャラカードを読み込みます。アイテムカードは直前に読み込んだキャラカードに合体します。</p>
     <p>カメラはHTTPSまたはlocalhostと、ブラウザの許可が必要です。映像は端末の中だけで解析し、サーバーへ送りません。読めないときは数字を入力できます。</p>
     <p>「国内49コード」部屋は49で始まるコード専用です。49は商品の原産国を保証しません。商品名・画像は見つかった場合だけ表示します。逃走と戦闘後アイテムは未対応です。</p>
   </details></section>
@@ -269,17 +268,17 @@ function translate(raw: string) {
     ['valid EAN-8 or EAN-13', '8桁または13桁のJAN/EANではありません。チェックデジットも確認してください。'],
     ['Room not found', '部屋が見つかりません。部屋を更新してください。'],
     ['Invalid JAN/EAN', '8桁または13桁のJAN/EANではありません。チェックデジットも確認してください。'],
-    ['not a hero', 'このカードは主人公にできません。'],
-    ['starting limits', '主人公カードの初期能力が上限を超えています。'],
-    ['wrong job', '2Pには職業が魔法使いのキャラカードを読み込んでください。'],
+    ['not a hero', 'このカードは戦士・魔法使いにできません。'],
+    ['starting limits', 'このカードの初期能力は戦士・魔法使いの上限を超えています。'],
+    ['wrong job', '魔法使いには職業が魔法使い（7〜9）のキャラカードを読み込んでください。'],
     ['First card must be a fighter', '先にキャラカードを読み込んでください。'],
     ['identical card suffixes', '下7桁が同じカードは合体できません。'],
     ['fusion requires', '冒険・挑戦でキャラカード同士を合体するには、同じ種族・同じ職業のカードが必要です。'],
     ['Information cards', '情報カードは冒険モードだけで使えます。'],
     ['cannot use MP', '職業が戦士のキャラにはMPアップを合体できません。'],
     ['Incompatible equipment', '職業が魔法使いのキャラには武器・防具を合体できません。'],
-    ['must be a warrior', 'C1/C2の1Pには職業が戦士のキャラカードを読み込んでください。'],
-    ['Invalid partner', '2Pのキャラカードを確認してください。'],
+    ['must be a warrior', '戦士には職業が戦士（0〜6）のキャラカードを読み込んでください。'],
+    ['Invalid partner', '魔法使いのキャラカードを確認してください。'],
     ['living hero', 'HPが0より大きいキャラカードを読み込んでください。'],
     ['Items cannot battle', 'アイテムカード単体では戦えません。'],
     ['Magic is unavailable', '魔法を使えません。MPが足りないか、職業が戦士のキャラです。'],
@@ -288,7 +287,7 @@ function translate(raw: string) {
     ['Campaign is finished', 'このシナリオは終了しています。'],
     ['C1 enemies', '冒険モードの敵はワールドで決まります。'],
     ['Enemy must be', '敵にはキャラカードを指定してください。'],
-    ['No living reserve', '交代できる主人公がいません。'],
+    ['No living reserve', '交代できる戦士・魔法使いがいません。'],
     ['LH requires', 'L-Hには鍵が3個必要です。'],
     ['Finish the current enemy', 'いまの敵を倒してから移動できます。'],
     ['World is cleared', 'このワールドはクリア済みです。'],
@@ -742,7 +741,7 @@ function renderCards() {
     const head = document.createElement('h2')
     const who = document.createElement('span')
     who.className = 'who'
-    who.textContent = side === 'left' ? (campaign ? '主人公' : '1P') : (campaign ? '敵' : '2P')
+    who.textContent = sideName(side)
     head.append(who, document.createTextNode(fighter ? fighter.name : '未読み込み'))
     if (fighter && combined.has(side)) {
       const badge = document.createElement('span')
@@ -755,7 +754,7 @@ function renderCards() {
       const empty = document.createElement('p')
       empty.className = 'empty-copy'
       empty.textContent = mode === 'C0' || online ? `CARD IN で${side === 'left' ? '1P' : '2P'}のキャラカードを読み込みます`
-        : side === 'left' ? '職業が戦士のキャラカードを読み込みます' : '職業が魔法使いのキャラカード（任意）を読み込みます'
+        : side === 'left' ? 'CARD IN で職業が戦士（0〜6）のキャラカードを読み込みます' : 'CARD IN で職業が魔法使い（7〜9）のキャラカードを読み込みます（任意）'
       card.append(empty)
       return card
     }
@@ -824,11 +823,12 @@ function render() {
     const snapshot = duel.snapshot()
     const active = snapshot[snapshot.turn]
     const human = controllable(snapshot.turn)
-    $('turn').textContent = `${campaign ? (snapshot.turn === 'left' ? '主人公' : '敵') : snapshot.turn === 'left' ? '1P' : '2P'}の番です`
+    $('turn').textContent = `${sideName(snapshot.turn)}の番です`
     $<HTMLButtonElement>('magic').disabled = !human || active.job <= 6
     $<HTMLButtonElement>('heal').disabled = !human || active.pp === 0 || snapshot.herbsBlocked[snapshot.turn]
   }
   document.querySelectorAll<HTMLButtonElement>('[data-slot]').forEach(button => {
+    button.textContent = slotName(button.dataset.slot!)
     button.setAttribute('aria-pressed', String(button.dataset.slot === target))
     button.hidden = online ? !['left', 'left-card'].includes(button.dataset.slot!) : button.dataset.slot === 'enemy' && mode !== 'C2'
   })
@@ -860,19 +860,35 @@ function guideNow(needsCampaign: boolean) {
     const turn = duel.snapshot().turn
     if (!controllable(turn)) return 'いま: 敵の番です。'
     const button = turn === 'left' ? 'L' : 'R'
-    return `いま: ${turn === 'left' ? (campaign ? '主人公' : '1P') : '2P'}の番。${button}-BATTLE で攻撃、${button}-POWER で回復。薬草・魔法は下のパネルから。`
+    return `いま: ${sideName(turn)}の番。${button}-BATTLE で攻撃、${button}-POWER で回復。薬草・魔法は下のパネルから。`
   }
-  if (campaign?.defeated) return 'いま: GAME OVER。1Pのキャラカードを読み込み直すと再挑戦できます。'
+  if (campaign?.defeated) return 'いま: GAME OVER。戦士のキャラカードを読み込み直すと再挑戦できます。'
   if (campaign?.complete) return 'いま: シナリオクリア。ON/OFF でリセットできます。'
   if (mode === 'C0') {
     if (!slots.left || !slots.right) return `いま: CARD IN で${!slots.left ? '1P' : '2P'}のキャラカードを読み込みます。アイテムカードは直前のキャラに合体します。`
     return 'いま: SET（または L-BATTLE / R-BATTLE）でバトル開始。1Pと2Pが交互に操作します。'
   }
   if (needsCampaign) {
-    if (!slots.left) return `いま: CARD IN で1Pに職業が戦士のキャラカード、2Pに職業が魔法使いのキャラカード（任意）を読み込みます。`
+    if (!slots.left) return 'いま: CARD IN で戦士（職業0〜6のキャラカード）を読み込みます。魔法使い（職業7〜9のキャラカード）は任意です。'
     return `いま: SET でシナリオ開始。${mode === 'C1' ? 'L-1〜L-5の敵と戦い、鍵3個でL-Hが開きます。' : '敵は「C2の敵」へ読み込むか、下の欄に入力します。'}`
   }
   return `いま: SET で次のバトル。${mode === 'C2' ? '敵は「C2の敵」へ読み込んで変更できます。' : ''}`
+}
+/** C1/C2 are single-player: the two slots are the warrior and the magician, not 1P/2P. */
+const solo = () => !online && mode !== 'C0'
+/** Name of a CARD IN slot (where the next card goes). */
+function slotName(slot: string) {
+  if (slot === 'enemy') return 'C2の敵'
+  const left = slot.startsWith('left')
+  const base = solo() ? (left ? '戦士' : '魔法使い') : left ? '1P' : '2P'
+  return slot.endsWith('-card') ? `${base} 合体` : base
+}
+/** Name of a side on screen: 1P/2P in C0 and VS; the active hero and 敵 during a scenario. */
+function sideName(side: Side) {
+  if (!solo()) return side === 'left' ? '1P' : '2P'
+  if (!campaign) return slotName(side)
+  if (side === 'right') return '敵'
+  return campaign.hero.job > 6 ? '魔法使い' : '戦士'
 }
 function setTarget(value: string) { target = value }
 function nextTargetAfter(side: Side, wasCard: boolean) {
@@ -942,7 +958,7 @@ async function loadBarcode(barcode: string) {
     roomFight = null
     if (online) setTarget('left')
     nextTargetAfter(side, isCard)
-    const loaded = isCard ? `${side === 'left' ? '1P' : '2P'}に${fighter.name}を合体` : `${SLOT_NAMES[side]} ${fighter.name} 読み込み完了`
+    const loaded = isCard ? `${slotName(side)}に${fighter.name}を合体` : `${slotName(side)} ${fighter.name} 読み込み完了`
     const next = online && !canChallenge() ? ` — ${roomRestriction(currentRoom(), challenger())}` : ''
     flashIndicators([])
     $<HTMLInputElement>('barcode').value = ''
@@ -954,7 +970,7 @@ async function loadBarcode(barcode: string) {
         if (result.product) products.set(fighter.barcode, result.product)
       } catch { /* Product lookup must not prevent local play. */ }
     })()
-    status(`${SLOT_NAMES[isCard ? `${side}-card` : side]} 読み込み中…`)
+    status(`${slotName(isCard ? `${side}-card` : side)} 読み込み中…`)
     // A second card shows its own values on the opposite rows, as the handheld does.
     await animateCardIn(isCard ? otherSide(side) : side, isCard ? fighter : null)
     status(`${loaded}${next}`)
@@ -1014,11 +1030,11 @@ function showDuel(newLines: string[]) {
   flashIndicators(indicatorsFor(newLines))
   const summary = summarize(newLines)
   if (snapshot.result) {
-    const winner = snapshot.result.winner === 'left' ? (campaign ? '主人公' : '1P') : (campaign ? '敵' : '2P')
+    const winner = sideName(snapshot.result.winner)
     status(`${winner} WIN! — ${snapshot.rounds}手で決着`)
     if (fxMode !== 'device') beep(880, 0.35)
   } else {
-    const who = snapshot.turn === 'left' ? (campaign ? '主人公' : '1P') : (campaign ? '敵' : '2P')
+    const who = sideName(snapshot.turn)
     status(`${summary || `守護星${snapshot.star + 1}`} — ${who}の番`)
   }
   if (snapshot.result && campaign && !campaignDuelResolved) {
@@ -1029,7 +1045,7 @@ function showDuel(newLines: string[]) {
     if (!campaign.complete && !campaign.defeated) slots.right = campaignEnemy(campaign)
     status(campaign.complete ? 'シナリオクリア！' : campaign.defeated
       ? 'GAME OVER'
-      : snapshot.result.winner === 'left' ? '勝利！' : '主人公を交代')
+      : snapshot.result.winner === 'left' ? '勝利！' : `${sideName('left')}に交代`)
     updateCampaignStatus()
   }
   render()
@@ -1040,7 +1056,7 @@ function summarize(lines: string[]) {
   for (const line of lines) {
     const match = /^([12])P (.+)$/.exec(line)
     if (!match) continue
-    const who = campaign ? (match[1] === '1' ? '主人公' : '敵') : `${match[1]}P`
+    const who = sideName(match[1] === '1' ? 'left' : 'right')
     const text = match[2]
     if (text === 'CRITICAL') { parts[parts.length - 1] += ' CRITICAL!'; continue }
     parts.push(text.startsWith('攻撃 ') ? `${who}の攻撃 ${text.slice(3)}ダメージ`
@@ -1220,7 +1236,7 @@ function startCampaign() {
       // A warrior in 2P is a common mistake; start solo instead of refusing.
       if (!magician || !(error instanceof Error) || !/wrong job|Invalid partner|not a hero/.test(error.message)) throw error
       campaign = build(undefined)
-      note = '（2Pのキャラは職業が魔法使いではないため、1人で開始）'
+      note = '（魔法使いに読み込んだカードは魔法使いにできないため、戦士1人で開始）'
     }
     slots.left = campaign.hero
     slots.right = campaignEnemy(campaign)
@@ -1292,7 +1308,7 @@ function openCamera() {
   $('camera-actions').hidden = false
   $('lcd').classList.add('scanning')
   $<HTMLButtonElement>('camera').setAttribute('aria-pressed', 'true')
-  $('camera-label').textContent = `${SLOT_NAMES[target]}へ読み取り中…`
+  $('camera-label').textContent = `${slotName(target)}へ読み取り中…`
   status('カメラを起動しています…')
   render()
   const streamPromise = requestBarcodeCamera()
