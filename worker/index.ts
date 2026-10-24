@@ -1,4 +1,4 @@
-import { battle as simulateBattle, decodeBarcode, validateBarcode } from '../src/game.ts'
+import { battle as simulateBattle, combineFighters, decodeBarcode, validateBarcode } from '../src/game.ts'
 import { amazonAffiliateEnabled, amazonApiEnabled, amazonSearchLinks, AMAZON_ASSOCIATE_TAG, searchAmazonProduct, type AmazonEnv } from './amazon.ts'
 
 interface Env extends AmazonEnv {
@@ -12,6 +12,11 @@ interface Room {
   name: string
   description: string
   barcode_prefix: string | null
+  sort_order: number
+  second_card: 'none' | 'both'
+  allow_heal: number
+  require_known_product: number
+  champion_second_barcode: string | null
   revision: number
   champion_barcode: string | null
   champion_fighter: string | null
@@ -199,9 +204,13 @@ function publicRoom(room: Room, owner: string | null, env: Env) {
     description: room.description,
     regulation: room.description,
     barcodePrefix: room.barcode_prefix,
+    secondCard: room.second_card,
+    allowHeal: room.allow_heal === 1,
+    requireKnownProduct: room.require_known_product === 1,
     revision: room.revision,
     champion: room.champion_barcode ? {
       barcode: room.champion_barcode,
+      secondBarcode: room.champion_second_barcode,
       fighter: JSON.parse(room.champion_fighter!),
       wins: room.champion_wins,
       isOwner: owner === room.champion_owner_hash,
@@ -354,10 +363,18 @@ async function lookupProduct(env: Env, code: string) {
 async function challenge(request: Request, env: Env, roomId: string): Promise<Response> {
   const owner = await requireSession(request, env)
   await rateLimit(env, owner, 'challenge', 12)
-  const code = barcode((await body(request)).barcode)
+  const input = await body(request)
+  const code = barcode(input.barcode)
+  const secondCode = input.secondBarcode === undefined || input.secondBarcode === null || input.secondBarcode === ''
+    ? null : barcode(input.secondBarcode)
   const room = await getRoom(env, roomId)
-  if (room.barcode_prefix && !code.startsWith(room.barcode_prefix)) {
-    throw new HttpError(400, 'ROOM_BARCODE_RESTRICTED', `This room requires barcodes beginning with ${room.barcode_prefix}.`)
+  for (const card of [code, secondCode]) {
+    if (card && room.barcode_prefix && !card.startsWith(room.barcode_prefix)) {
+      throw new HttpError(400, 'ROOM_BARCODE_RESTRICTED', `This room requires barcodes beginning with ${room.barcode_prefix}.`)
+    }
+  }
+  if (secondCode && room.second_card === 'none') {
+    throw new HttpError(400, 'SECOND_CARD_NOT_ALLOWED', 'This room allows one character card only.')
   }
   if (room.champion_owner_hash === owner) {
     throw new HttpError(409, 'OWN_CHAMPION', 'You cannot challenge your own champion.')
@@ -372,12 +389,28 @@ async function challenge(request: Request, env: Env, roomId: string): Promise<Re
   if (fighter.kind !== 'fighter' || fighter.race > 4) {
     throw new HttpError(400, 'ITEM_NOT_FIGHTER', 'This barcode is an item. Choose a fighter barcode for room battles.')
   }
+  if (secondCode) {
+    try {
+      fighter = combineFighters(fighter, decodeBarcode(secondCode, { rng }), { mode: 'C0' })
+    } catch (error) {
+      throw new HttpError(400, 'INVALID_SECOND_CARD', error instanceof Error ? error.message : 'These cards cannot be combined.')
+    }
+  }
+  if (room.require_known_product) {
+    for (const card of [code, secondCode]) {
+      if (!card) continue
+      let name: string | null = null
+      try { name = (await lookupProduct(env, card))?.name ?? null } catch { /* Treated as unknown below. */ }
+      if (!name) throw new HttpError(400, 'UNKNOWN_PRODUCT', 'This room accepts barcodes of known products only.')
+    }
+  }
   const battle = room.champion_fighter
-    ? simulateBattle(JSON.parse(room.champion_fighter), fighter, rng)
+    ? simulateBattle(JSON.parse(room.champion_fighter), fighter, rng, { noHeal: room.allow_heal !== 1 })
     : { winner: 'right' as const, rounds: 0, log: ['The challenger claims the empty room.'],
       leftHp: 0, rightHp: fighter.hp, reason: 'empty_room' }
   const challengerWon = battle.winner === 'right'
   const winnerBarcode = challengerWon ? code : room.champion_barcode!
+  const winnerSecond = challengerWon ? secondCode : room.champion_second_barcode
   const winnerFighter = challengerWon ? JSON.stringify(fighter) : room.champion_fighter!
   const winnerOwner = challengerWon ? owner : room.champion_owner_hash!
   const wins = !room.champion_barcode ? 0 : challengerWon ? 1 : room.champion_wins + 1
@@ -385,13 +418,14 @@ async function challenge(request: Request, env: Env, roomId: string): Promise<Re
   const timestamp = now()
   const results = await env.DB.batch([
     env.DB.prepare(
-      'UPDATE rooms SET revision = revision + 1, champion_barcode = ?, champion_fighter = ?, ' +
+      'UPDATE rooms SET revision = revision + 1, champion_barcode = ?, champion_second_barcode = ?, champion_fighter = ?, ' +
       'champion_owner_hash = ?, champion_wins = ?, last_battle_id = ?, updated_at = ? WHERE id = ? AND revision = ? AND enabled = 1',
-    ).bind(winnerBarcode, winnerFighter, winnerOwner, wins, id, timestamp, roomId, room.revision),
+    ).bind(winnerBarcode, winnerSecond, winnerFighter, winnerOwner, wins, id, timestamp, roomId, room.revision),
     env.DB.prepare(
-      'INSERT INTO battles (id, room_id, room_revision, challenger_barcode, defender_barcode, challenger_owner_hash, winner_barcode, result, created_at) ' +
-      'SELECT ?, id, revision, ?, ?, ?, ?, ?, ? FROM rooms WHERE id = ? AND last_battle_id = ?',
-    ).bind(id, code, room.champion_barcode, owner, winnerBarcode, JSON.stringify(battle), timestamp, roomId, id),
+      'INSERT INTO battles (id, room_id, room_revision, challenger_barcode, challenger_second_barcode, defender_barcode, defender_second_barcode, ' +
+      'challenger_owner_hash, winner_barcode, result, created_at) ' +
+      'SELECT ?, id, revision, ?, ?, ?, ?, ?, ?, ?, ? FROM rooms WHERE id = ? AND last_battle_id = ?',
+    ).bind(id, code, secondCode, room.champion_barcode, room.champion_second_barcode, owner, winnerBarcode, JSON.stringify(battle), timestamp, roomId, id),
   ])
   if (results[0]!.meta.changes !== 1 || results[1]!.meta.changes !== 1) {
     throw new HttpError(409, 'CHAMPION_CHANGED', 'The champion changed. Refresh the room and try again.')
@@ -399,7 +433,7 @@ async function challenge(request: Request, env: Env, roomId: string): Promise<Re
   let product = null
   try { product = await lookupProduct(env, code) } catch { /* Optional metadata must not invalidate committed battles. */ }
   const updated: Room = {
-    ...room, revision: room.revision + 1, champion_barcode: winnerBarcode, champion_fighter: winnerFighter,
+    ...room, revision: room.revision + 1, champion_barcode: winnerBarcode, champion_second_barcode: winnerSecond, champion_fighter: winnerFighter,
     champion_owner_hash: winnerOwner, champion_wins: wins, last_battle_id: id, updated_at: timestamp,
     champion_product_name: challengerWon ? product?.name ?? null : room.champion_product_name,
     champion_has_thumbnail: challengerWon ? (product?.thumbnail ? 1 : 0) : room.champion_has_thumbnail,
@@ -410,7 +444,8 @@ async function challenge(request: Request, env: Env, roomId: string): Promise<Re
   const publicResult = publicRoom(updated, owner, env)
   const message = !room.champion_barcode ? 'You are the first champion of this room.'
     : challengerWon ? 'Victory! Your fighter is the new champion.' : 'The champion defended the room. Try another fighter.'
-  return json({ message, battle: { ...battle, id, roomId, challengerBarcode: code, defenderBarcode: room.champion_barcode, winnerBarcode, createdAt: timestamp },
+  return json({ message, battle: { ...battle, id, roomId, challengerBarcode: code, challengerSecondBarcode: secondCode,
+    defenderBarcode: room.champion_barcode, defenderSecondBarcode: room.champion_second_barcode, winnerBarcode, createdAt: timestamp },
     room: publicResult, champion: publicResult.champion, product })
 }
 
@@ -429,7 +464,7 @@ async function api(request: Request, env: Env): Promise<Response> {
   }
   if (request.method === 'GET' && path === '/api/rooms') {
     const owner = await session(request, env)
-    const rows = await env.DB.prepare(`${ROOM_SELECT} WHERE rooms.enabled = 1 ORDER BY rooms.id`).all<Room>()
+    const rows = await env.DB.prepare(`${ROOM_SELECT} WHERE rooms.enabled = 1 ORDER BY rooms.sort_order, rooms.id`).all<Room>()
     return json({ rooms: rows.results.map(room => publicRoom(room, owner, env)) })
   }
   const roomMatch = /^\/api\/rooms\/([a-z0-9_-]+)$/.exec(path)

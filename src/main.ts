@@ -12,7 +12,11 @@ type Product = {
   amazonStandardUrl?: string | null
   amazonLinkType?: 'product' | 'search'
 }
-type Room = { id: string; name: string; barcodePrefix: string | null; champion: { barcode: string; fighter?: Fighter; wins: number; isOwner?: boolean; product?: Product | null } | null }
+type Room = {
+  id: string; name: string; barcodePrefix: string | null
+  secondCard?: 'none' | 'both'; allowHeal?: boolean; requireKnownProduct?: boolean
+  champion: { barcode: string; secondBarcode?: string | null; fighter?: Fighter; wins: number; isOwner?: boolean; product?: Product | null } | null
+}
 type RoomFight = { roomId: string; challenger: Fighter; champion: Fighter | null; winner: Side }
 type Side = 'left' | 'right'
 type Mode = 'C0' | 'C1' | 'C2'
@@ -113,7 +117,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </div>
     <div class="slot">
       <div class="slot-mouth"><span>CARD IN</span><i class="arrow-r"></i></div>
-      <div class="slot-targets" role="group" aria-label="読み込み先">
+      <div class="slot-targets" id="slot-targets" role="group" aria-label="読み込み先">
         <button type="button" data-slot="left" aria-pressed="true">1P</button>
         <button type="button" data-slot="right">2P</button>
         <button type="button" data-slot="left-card">1P 合体</button>
@@ -251,6 +255,9 @@ function errorMessage(error: unknown) {
 function translate(raw: string) {
   const known: [string, string][] = [
     ['first champion', 'この部屋の最初の王者になりました！'],
+    ['one character card only', 'この部屋はキャラカード1枚のみです。'],
+    ['known products only', 'この部屋は商品名が確認できるコードのみ挑戦できます。'],
+    ['Healing is not allowed', 'このルールでは回復（薬草・POWER・回復魔法）は使えません。'],
     ['new champion', '勝利！あなたのカードが新しい王者です。'],
     ['defended the room', '王者が防衛しました。別のカードで挑戦してください。'],
     ['requires barcodes beginning', 'この部屋は指定の番号で始まるコード専用です。'],
@@ -386,16 +393,35 @@ function controllable(side: Side) {
 }
 
 function currentRoom() { return rooms[roomIndex] ?? null }
-/** Rooms always use the original single card, as the Worker recomputes it. */
+const allowsSecond = (room: Room | null) => room?.secondCard === 'both'
+/** The second card sent to the current room, if its regulation accepts one. */
+function challengerSecond() {
+  return allowsSecond(currentRoom()) ? secondCards.get('left') ?? null : null
+}
+/** What the Worker will field: the character card, plus the second card where the room allows it. */
 function challenger(): Fighter | null {
   const code = heroCards.get('left')
-  return code ? decodeBarcode(code) : null
+  if (!code) return null
+  const base = decodeBarcode(code)
+  const second = challengerSecond()
+  if (!second) return base
+  try { return combineFighters(base, decodeBarcode(second), { mode: 'C0' }) } catch { return base }
 }
 function roomRestriction(room: Room | null, fighter: Fighter | null) {
   if (!room) return '部屋を読み込めていません'
   if (room.champion?.isOwner) return 'あなたが王者です。ほかの部屋に挑戦できます'
-  if (fighter && room.barcodePrefix && !fighter.barcode.startsWith(room.barcodePrefix)) return `${room.barcodePrefix}で始まるカードだけ挑戦できます`
+  const prefix = room.barcodePrefix
+  if (fighter && prefix && [fighter.barcode, challengerSecond()].some(code => code && !code.startsWith(prefix))) return `${prefix}で始まるカードだけ挑戦できます`
   return ''
+}
+/** One-line regulation summary for the room picker and list. */
+function regulationText(room: Room) {
+  return [
+    room.barcodePrefix ? `${room.barcodePrefix}始まりのみ` : 'コード無差別',
+    allowsSecond(room) ? `2枚目（アイテム・合体）可${room.barcodePrefix ? `・2枚目も${room.barcodePrefix}始まり` : ''}` : 'キャラカード1枚のみ',
+    room.allowHeal === false ? '回復（薬草・POWER・回復魔法）禁止' : '',
+    room.requireKnownProduct ? '商品名が確認できるコードのみ' : '',
+  ].filter(Boolean).join(' / ')
 }
 function canChallenge() {
   const room = currentRoom()
@@ -703,7 +729,8 @@ function secondName(side: Side, race: number) {
   try { return code ? decodeBarcode(code).name : RACE_NAMES[race] } catch { return RACE_NAMES[race] }
 }
 function renderCards() {
-  const cards = (['left', 'right'] as const).map(side => {
+  // In VS the 2P side is the room champion, listed under 勝ち抜き部屋 instead.
+  const cards = (online ? ['left'] as const : ['left', 'right'] as const).map(side => {
     const card = document.createElement('article')
     const fighter = slots[side]
     card.className = 'card'
@@ -761,6 +788,7 @@ function renderCards() {
     return card
   })
   $('cards').replaceChildren(...cards)
+  $('cards').classList.toggle('single', online)
 }
 
 function render() {
@@ -799,8 +827,11 @@ function render() {
   }
   document.querySelectorAll<HTMLButtonElement>('[data-slot]').forEach(button => {
     button.setAttribute('aria-pressed', String(button.dataset.slot === target))
-    button.hidden = online ? button.dataset.slot !== 'left' : button.dataset.slot === 'enemy' && mode !== 'C2'
+    button.hidden = online ? !['left', 'left-card'].includes(button.dataset.slot!) : button.dataset.slot === 'enemy' && mode !== 'C2'
   })
+  // In VS only 1P reads cards; the target row matters only when a second card is allowed.
+  $('slot-targets').hidden = online && !allowsSecond(currentRoom())
+  if (online && target !== 'left' && (target !== 'left-card' || !allowsSecond(currentRoom()))) setTarget('left')
   document.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach(button => {
     button.setAttribute('aria-pressed', String(button.dataset.mode === mode))
     button.disabled = fighting
@@ -812,7 +843,7 @@ function render() {
 function guideNow(needsCampaign: boolean) {
   if (playing()) return 'いま: 演出中。SET か液晶のタップで最後までスキップできます。'
   if (online) {
-    if (!challenger()) return 'いま: CARD IN で1Pのキャラカードを読み込みます。アイテムカード・合体は使えません。'
+    if (!challenger()) return `いま: CARD IN で1Pのキャラカードを読み込みます。${allowsSecond(currentRoom()) ? 'この部屋は2枚目（アイテムカードか合体するキャラカード）も使えます。' : 'この部屋はキャラカード1枚のみです。'}`
     const restriction = roomRestriction(currentRoom(), challenger())
     return restriction ? `いま: ${restriction}。液晶下の ◀ ▶ で部屋を選べます。` : 'いま: 液晶下の ◀ ▶ で部屋を選び、SET（または L-BATTLE）で挑戦します。'
   }
@@ -869,14 +900,14 @@ async function loadBarcode(barcode: string) {
       render()
       return
     }
-    if (online && fighter.kind !== 'fighter') throw new Error('勝ち抜き部屋ではアイテムカードは使えません。キャラカードを読み込んでください。')
+    if (online && fighter.kind !== 'fighter' && !allowsSecond(currentRoom())) throw new Error('この部屋はキャラカード1枚のみです。アイテムカードは使えません。')
     clearDuel()
     let side: Side = target.startsWith('left') ? 'left' : 'right'
     let isCard = target.endsWith('-card')
     if (!isCard && fighter.kind !== 'fighter') {
       // An item is always a second card: equip it to the fighter just read
       // instead of refusing it (1P first, then the item, is the usual order).
-      const owner = ([side, side === 'left' ? 'right' : 'left'] as const).find(s => slots[s] && !combined.has(s))
+      const owner = (online ? ['left'] as const : [side, otherSide(side)] as const).find(s => slots[s] && !combined.has(s))
       if (!owner) throw new Error('アイテムカードはキャラカードに合体させるカードです。先にキャラカードを読み込んでください。')
       side = owner
       isCard = true
@@ -1304,7 +1335,7 @@ function renderRoomBar() {
   const champion = room.champion
   const holder = champion ? `王者 ${champion.product?.name || champion.barcode} ${champion.wins}連勝` : '王者なし — 勝てば王者'
   const restriction = roomRestriction(room, challenger())
-  $('room-info').textContent = restriction ? `${holder} / ${restriction}` : `${holder}${room.barcodePrefix ? ` / ${room.barcodePrefix}始まり限定` : ''}`
+  $('room-info').textContent = `${holder} / ${restriction || regulationText(room)}`
 }
 function selectRoom(index: number) {
   if (busy || rooms.length === 0) return
@@ -1342,9 +1373,9 @@ function renderRoomList() {
       card.append(image)
     }
     const regulation = document.createElement('p')
-    regulation.textContent = room.barcodePrefix ? `レギュレーション: ${room.barcodePrefix}で始まるコード` : 'レギュレーション: 無差別'
+    regulation.textContent = `レギュレーション: ${regulationText(room)}`
     card.append(heading, regulation, description)
-    if (room.champion) appendBarcode(card, room.champion.barcode)
+    if (room.champion) for (const code of [room.champion.barcode, room.champion.secondBarcode]) if (code) appendBarcode(card, code)
     appendAmazonLinks(card, product)
     card.append(button)
     return card
@@ -1412,7 +1443,7 @@ async function challengeCurrent() {
     await ensureSession()
     const championBefore = room.champion?.fighter ?? null
     const result = await api<{ message: string; battle?: { log: string[]; winner: 'left' | 'right'; leftHp: number; rightHp: number } }>(
-      `/api/rooms/${encodeURIComponent(room.id)}/challenge`, { barcode: fighter.barcode })
+      `/api/rooms/${encodeURIComponent(room.id)}/challenge`, { barcode: heroCards.get('left'), secondBarcode: challengerSecond() })
     const lines = (result.battle?.log || []).map(fromChampionView)
     log(lines)
     if (result.battle && championBefore) {
