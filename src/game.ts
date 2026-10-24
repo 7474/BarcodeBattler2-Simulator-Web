@@ -300,7 +300,15 @@ export interface BattleSnapshot {
   /** Original guardian-star index, retained across encounters by campaigns. */
   star: 0 | 1 | 2
 }
-export interface BattleOptions { star?: 0 | 1 | 2 }
+export interface BattleOptions {
+  star?: 0 | 1 | 2
+  /**
+   * Official tournaments banned recovery by herbs and magic (Wikipedia
+   * 「バーコードバトラー」); POWER spends a herb, so it is banned too. The CPU
+   * then never takes its low-HP POWER branch.
+   */
+  noHeal?: boolean
+}
 export interface BattleSession {
   snapshot(): BattleSnapshot
   act(action: BattleAction): BattleSnapshot
@@ -402,6 +410,7 @@ export function createBattle(left: Fighter, right: Fighter, rng: () => number = 
     if (!action || !['attack', 'power', 'herbs', 'magic'].includes(action.type)) throw new Error('Invalid battle action')
     if ((action.type === 'attack' || action.type === 'magic') && action.timing !== undefined && ![1, 2].includes(action.timing)) throw new Error('Invalid timing')
     if (action.type === 'power' && action.timing !== undefined && ![10, 14].includes(action.timing)) throw new Error('Invalid timing')
+    if (options.noHeal && (action.type === 'power' || action.type === 'herbs' || action.type === 'magic' && (action.spell === 3 || action.spell === 4))) throw new Error('Healing is not allowed')
     if (action.type === 'power' && (a.pp < 1 || a.herbsBlocked && !automatic)) throw new Error('Herbs are unavailable')
     if (action.type === 'herbs' && (![1, 2, 3].includes(action.amount) || a.pp < action.amount || a.herbsBlocked)) throw new Error('Herbs are unavailable')
     if (action.type === 'magic' && (!Number.isInteger(action.spell) || action.spell < 0 || action.spell > 9 || a.mp < MAGIC_COSTS[action.spell] || !automatic && a.job <= 6)) throw new Error('Magic is unavailable')
@@ -461,7 +470,7 @@ export function createBattle(left: Fighter, right: Fighter, rng: () => number = 
     const a = fighters[turn], b = fighters[1 - turn]
     const roll = randomInt(rng, 100) + 1, magicRoll = randomInt(rng, 100) + 1
     // Original CPU directly calls power(), bypassing F9's disabled UI button.
-    if (a.hp / a.max < 0.2 && a.pp > 0 && roll > 50) return act({ type: 'power' }, true)
+    if (!options.noHeal && a.hp / a.max < 0.2 && a.pp > 0 && roll > 50) return act({ type: 'power' }, true)
     if (a.mp > 0 && roll >= 70) {
       if (magicRoll >= 40 && magicRoll < 60 && a.mp >= 3 && b.df <= 5) return act({ type: 'magic', spell: 5 }, true)
       if (magicRoll >= 70 && magicRoll < 90 && a.mp >= 7 && b.st <= 5) return act({ type: 'magic', spell: 7 }, true)

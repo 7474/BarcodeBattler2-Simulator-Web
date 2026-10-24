@@ -389,6 +389,7 @@ input, select {
 #sample { flex: 1; }
 
 .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.cards.single { grid-template-columns: 1fr; }
 .card { min-width: 0; padding: 10px; border-radius: 12px; background: #fff; border: 1px solid var(--panel-line); border-left: 5px solid var(--panel-line); }
 .card.targeted { border-left-color: var(--accent); box-shadow: 0 0 0 2px rgba(63, 79, 168, .18); }
 .card h2 { margin: 0 0 4px; font-size: .95rem; overflow-wrap: anywhere; }

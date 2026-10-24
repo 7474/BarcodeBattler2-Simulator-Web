@@ -365,3 +365,19 @@ test('critical labels do not apply another damage multiplier', () => {
   assert.equal(after.right.hp, 11500)
   assert.ok(after.log.includes('1P CRITICAL'))
 })
+
+test('noHeal bans POWER, herbs and healing magic, and stops the CPU from using POWER', () => {
+  const mage = fighter({ job: 7, mp: 10 })
+  const session = createBattle(mage, fighter({ barcode: rightCode }), () => 0, { star: 0, noHeal: true })
+  const turn = session.snapshot().turn
+  for (const action of [{ type: 'power' }, { type: 'herbs', amount: 1 }, { type: 'magic', spell: 3 }, { type: 'magic', spell: 4 }] as const) {
+    if (turn === 'left' || action.type !== 'magic') assert.throws(() => session.act(action), /Healing/)
+  }
+  // A CPU near death with herbs left would POWER (roll > 50) without the rule.
+  let draws = 0
+  const rng = () => [0.99, 0.99][draws++ % 2] ?? 0.99
+  const weak = { ...fighter({ hp: 10000 }), maxHp: 10000 }
+  const strong = fighter({ barcode: rightCode, hp: 99900, attack: 100, defense: 19900 })
+  const result = battle({ ...weak, hp: 1000 }, strong, rng, { star: 0, noHeal: true })
+  assert.equal(result.log.some(line => line.includes('回復')), false)
+})
