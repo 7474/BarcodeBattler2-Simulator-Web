@@ -76,7 +76,7 @@ Creators APIの利用条件・表示要件に従ってください。
 
 ### 旧リビジョンのプレビュー（見た目の比較用）
 
-`.github/workflows/preview-legacy.yml` が、Copilot版（`5bf7dbd`、Cursorによる作り直し前の最後のmain）と
+`.github/workflows/ci-cd.yml` の `legacy-previews` ジョブが、Copilot版（`5bf7dbd`、Cursorによる作り直し前の最後のmain）と
 Cursor版（`2070c34`、PR #7）をビルドします。ビルドしたものは、本番とは別の静的アセットだけのWorker
 `barcode-battler-web-preview`（`preview/wrangler.jsonc`）に、別名付きの
 [Version URL](https://developers.cloudflare.com/workers/configuration/previews/)としてアップロードします。
@@ -85,8 +85,8 @@ Cursor版（`2070c34`、PR #7）をビルドします。ビルドしたものは
   `https://cursor-…` です。Worker自体のURL（別名なし）は両者へのリンク集です。
 - Version URLはアップロードしたバージョンの設定で動くため、旧コードが本番のD1/R2に触れないよう、
   APIとバインディングは載せていません。ローカル対戦は動き、勝ち抜き部屋と商品検索は動きません。
-- `preview/` かこのワークフローを変更して`main`へpushしたときと、Actionsの手動実行（対象リビジョンを指定可能）で動きます。
-  アカウントに`workers.dev`のサブドメインが必要です。
+- このリポジトリのブランチからのPull Requestと、Actionsの手動実行で動きます（フォークからのPRではSecretsが使えないため動きません）。
+  対象リビジョンはジョブの `COPILOT_REF` / `CURSOR_REF` で変えられます。アカウントに`workers.dev`のサブドメインが必要です。
 
 ### GitHub ActionsでのCI/CD
 

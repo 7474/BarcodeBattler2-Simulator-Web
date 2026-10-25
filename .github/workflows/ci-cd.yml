@@ -31,3 +31,58 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  # Earlier UI revisions as aliased Version URLs on a separate, assets-only
+  # Worker (preview/wrangler.jsonc). Not connected to the Worker API, D1 or R2:
+  # local play works, rooms and product lookup do not. Runs for pull requests
+  # from this repository (secrets are not available to forks) and manual runs.
+  legacy-previews:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    concurrency:
+      group: legacy-previews
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # Copilot: last main before the Cursor restyle (PR #4). Cursor: PR #7.
+      COPILOT_REF: 5bf7dbd
+      CURSOR_REF: 2070c34
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+
+      - name: Build legacy revisions
+        run: |
+          set -euo pipefail
+          build() {
+            git worktree add --detach "legacy/$1" "$2"
+            (cd "legacy/$1" && npm ci && npm run build)
+          }
+          build copilot "$COPILOT_REF"
+          build cursor "$CURSOR_REF"
+
+      # The landing page is the preview Worker's deployed version; it links to the aliases.
+      - name: Deploy landing page
+        run: npx wrangler deploy -c preview/wrangler.jsonc
+
+      - name: Upload aliased versions
+        run: |
+          set -euo pipefail
+          {
+            echo '## Legacy UI previews'
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          for alias in copilot cursor; do
+            ref=$(git -C "legacy/$alias" rev-parse --short HEAD)
+            npx wrangler versions upload -c preview/wrangler.jsonc --assets "legacy/$alias/dist" \
+              --preview-alias "$alias" --tag "$alias-$ref" --message "$alias UI at $ref (assets only)" | tee "upload-$alias.log"
+            url=$(grep -oE "https://$alias-[a-z0-9.-]+\.workers\.dev" "upload-$alias.log" | head -1 || true)
+            echo "- $alias ($ref): ${url:-see the job log}" >> "$GITHUB_STEP_SUMMARY"
+          done
