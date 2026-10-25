@@ -74,6 +74,20 @@ npx wrangler secret put AMAZON_CLIENT_SECRET
 適格販売により収入を得ています。」と表示します。
 Creators APIの利用条件・表示要件に従ってください。
 
+### 旧リビジョンのプレビュー（見た目の比較用）
+
+`.github/workflows/preview-legacy.yml` が、Copilot版（`5bf7dbd`、Cursorによる作り直し前の最後のmain）と
+Cursor版（`2070c34`、PR #7）をビルドします。ビルドしたものは、本番とは別の静的アセットだけのWorker
+`barcode-battler-web-preview`（`preview/wrangler.jsonc`）に、別名付きの
+[Version URL](https://developers.cloudflare.com/workers/configuration/previews/)としてアップロードします。
+
+- URLは `https://copilot-barcode-battler-web-preview.<workers.devのサブドメイン>.workers.dev/` と
+  `https://cursor-…` です。Worker自体のURL（別名なし）は両者へのリンク集です。
+- Version URLはアップロードしたバージョンの設定で動くため、旧コードが本番のD1/R2に触れないよう、
+  APIとバインディングは載せていません。ローカル対戦は動き、勝ち抜き部屋と商品検索は動きません。
+- `preview/` かこのワークフローを変更して`main`へpushしたときと、Actionsの手動実行（対象リビジョンを指定可能）で動きます。
+  アカウントに`workers.dev`のサブドメインが必要です。
+
 ### GitHub ActionsでのCI/CD
 
 `main`へのPull Requestではテスト・型チェック・ビルドを実行し、
