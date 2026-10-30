@@ -3,7 +3,7 @@ import './style.css'
 import { createBattle, combineFighters, decodeBarcode, jobName, MAGIC_COSTS, RACE_NAMES, type BattleAction, type BattleSession, type Fighter } from './game.ts'
 import { campaignEnemy, createCampaign, finishCampaignBattle, selectCampaignWorld, setCampaignEnemy, switchCampaignHero, type Campaign } from './campaign.ts'
 import { beep, playTones, setSoundEnabled, soundEnabled, SOUNDS, unlockAudio, type Tone } from './sound.ts'
-import { LINKED_IMAGE_HOSTS } from '../worker/products.ts'
+import { itemLink, LINKED_IMAGE_HOSTS } from '../worker/products.ts'
 import { cameraErrorMessage, interpretScan, requestBarcodeCamera, startBarcodeCamera, type CameraSession } from './scan.ts'
 
 type Product = {
@@ -12,6 +12,8 @@ type Product = {
   amazonAffiliateUrl?: string | null
   amazonStandardUrl?: string | null
   amazonLinkType?: 'product' | 'search'
+  /** Product page on the platform the name / thumbnail came from. */
+  itemUrl?: string | null
 }
 type Room = {
   id: string; name: string; barcodePrefix: string | null
@@ -210,7 +212,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <p>「49戦」の部屋は49で始まるコード専用です。49は商品の原産国を保証しません。商品名・画像は見つかった場合だけ表示します。逃走と戦闘後アイテムは未対応です。</p>
     </details>
   </section>
-  <footer><p>非公式ファンプロジェクト · 原作ゲーム・商標の権利は各権利者に帰属します</p><p id="amazon-disclosure" hidden>Amazonのアソシエイトとして、BarcodeBattler2-Simulator-Webは適格販売により収入を得ています。</p><p>商品データ: <a href="https://world.openfoodfacts.org/" target="_blank" rel="noreferrer">Open Food Facts</a>・<a href="https://world.openbeautyfacts.org/" target="_blank" rel="noreferrer">Open Beauty Facts</a>・<a href="https://world.openproductsfacts.org/" target="_blank" rel="noreferrer">Open Products Facts</a>・<a href="https://world.openpetfoodfacts.org/" target="_blank" rel="noreferrer">Open Pet Food Facts</a>（ODbL / 画像 CC BY-SA）</p><p>書誌・書影: <a href="https://openbd.jp/" target="_blank" rel="noreferrer">openBD</a></p><p id="yahoo-credit" hidden><!-- Begin Yahoo! JAPAN Web Services Attribution Snippet -->
+  <footer><p>非公式ファンプロジェクト · 原作ゲーム・商標の権利は各権利者に帰属します</p><p id="amazon-disclosure" hidden>Amazonのアソシエイトとして、BarcodeBattler2-Simulator-Webは適格販売により収入を得ています。</p><p id="shop-affiliate-disclosure" hidden></p><p>商品データ: <a href="https://world.openfoodfacts.org/" target="_blank" rel="noreferrer">Open Food Facts</a>・<a href="https://world.openbeautyfacts.org/" target="_blank" rel="noreferrer">Open Beauty Facts</a>・<a href="https://world.openproductsfacts.org/" target="_blank" rel="noreferrer">Open Products Facts</a>・<a href="https://world.openpetfoodfacts.org/" target="_blank" rel="noreferrer">Open Pet Food Facts</a>（ODbL / 画像 CC BY-SA）</p><p>書誌・書影: <a href="https://openbd.jp/" target="_blank" rel="noreferrer">openBD</a></p><p id="yahoo-credit" hidden><!-- Begin Yahoo! JAPAN Web Services Attribution Snippet -->
 <span style="margin:15px 15px 15px 15px"><a href="https://developer.yahoo.co.jp/sitemap/">Webサービス by Yahoo! JAPAN</a></span>
 <!-- End Yahoo! JAPAN Web Services Attribution Snippet --></p><p id="rakuten-credit" hidden><!-- Rakuten Web Services Attribution Snippet FROM HERE -->
 <a href="https://developers.rakuten.com/" target="_blank">Supported by Rakuten Developers</a>
@@ -740,12 +742,26 @@ function appendBarcode(parent: HTMLElement, code: string) {
 function productPart(code: string, role: string, product: Product | null | undefined, fallback = '') {
   const part = document.createElement('div')
   part.className = 'part'
+  // Thumbnails from Yahoo!ショッピング / 楽天市場 / Open Facts link back to that platform.
+  const item = itemLink(product?.itemUrl)
+  const external = (anchor: HTMLAnchorElement) => {
+    anchor.href = item!.url
+    anchor.target = '_blank'
+    anchor.rel = item!.affiliate ? 'sponsored noreferrer' : 'noreferrer'
+    return anchor
+  }
   if (product?.thumbnail && validProductThumbnail(product.thumbnail)) {
     const image = document.createElement('img')
     image.src = product.thumbnail
     image.alt = product.name || code
     image.className = 'product-image'
-    part.append(image)
+    if (item) {
+      const link = external(document.createElement('a'))
+      link.className = 'product-image-link'
+      link.title = `${item.platform}で見る`
+      link.append(image)
+      part.append(link)
+    } else part.append(image)
   }
   const text = document.createElement('div')
   text.className = 'part-text'
@@ -766,16 +782,27 @@ function productPart(code: string, role: string, product: Product | null | undef
   codes.className = 'barcodes'
   appendBarcode(codes, code)
   text.append(codes)
+  if (item) {
+    const links = document.createElement('div')
+    links.className = 'product-links'
+    const link = external(document.createElement('a'))
+    link.textContent = `${item.platform}で見る${item.affiliate ? '（アフィリエイト）' : ''}`
+    links.append(link)
+    text.append(links)
+  }
   appendAmazonLinks(text, product)
   part.append(text)
   return part
 }
-type Credits = { amazonAffiliateEnabled: boolean; yahooCredit?: boolean; rakutenCredit?: boolean }
+type Credits = { amazonAffiliateEnabled: boolean; yahooCredit?: boolean; rakutenCredit?: boolean; shopAffiliates?: string[] }
 /** Disclosures and API credits required by the product sources in use. */
 function showCredits(credits: Credits) {
   $('amazon-disclosure').hidden = !credits.amazonAffiliateEnabled
   $('yahoo-credit').hidden = !credits.yahooCredit
   $('rakuten-credit').hidden = !credits.rakutenCredit
+  const programmes = credits.shopAffiliates ?? []
+  $('shop-affiliate-disclosure').hidden = programmes.length === 0
+  $('shop-affiliate-disclosure').textContent = `「（アフィリエイト）」と表示した商品リンクは${programmes.join('・')}のアフィリエイトリンクです。`
 }
 /** The second card's own label (e.g. 武器（使い捨て）, 薬草アップ). */
 function secondName(side: Side, race: number) {
@@ -1012,7 +1039,7 @@ async function loadBarcode(barcode: string) {
     const lookup = (async () => {
       try {
         await ensureSession()
-        const result = await api<{ product: Product | null; amazonAffiliateEnabled: boolean; yahooCredit?: boolean; rakutenCredit?: boolean }>(`/api/products/${fighter.barcode}`)
+        const result = await api<{ product: Product | null } & Credits>(`/api/products/${fighter.barcode}`)
         showCredits(result)
         if (result.product) products.set(fighter.barcode, result.product)
       } catch { /* Product lookup must not prevent local play. */ }

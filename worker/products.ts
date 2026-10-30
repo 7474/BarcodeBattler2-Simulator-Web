@@ -20,6 +20,8 @@ export interface ResolvedProduct {
   thumbnailUrl?: string | null
   /** Image the Worker copies into R2 and serves from /api/images. */
   cacheImageUrl?: string | null
+  /** The product's page on the source platform; thumbnails link here. */
+  itemUrl?: string | null
 }
 
 export type FetchJson = (url: string) => Promise<unknown>
@@ -37,6 +39,31 @@ const OPEN_FACTS = [
   ['openproductsfacts', 'world.openproductsfacts.org', 'images.openproductsfacts.org'],
   ['openpetfoodfacts', 'world.openpetfoodfacts.org', 'images.openpetfoodfacts.org'],
 ] as const
+
+/** Hosts an item link may point at, with the platform name shown on the link. */
+export const ITEM_LINK_HOSTS: Record<string, string> = {
+  'store.shopping.yahoo.co.jp': 'Yahoo!ショッピング',
+  'shopping.yahoo.co.jp': 'Yahoo!ショッピング',
+  'paypaymall.yahoo.co.jp': 'Yahoo!ショッピング',
+  'lohaco.yahoo.co.jp': 'Yahoo!ショッピング',
+  'ck.jp.ap.valuecommerce.com': 'Yahoo!ショッピング',
+  'item.rakuten.co.jp': '楽天市場',
+  'hb.afl.rakuten.co.jp': '楽天市場',
+  'world.openfoodfacts.org': 'Open Food Facts',
+  'world.openbeautyfacts.org': 'Open Beauty Facts',
+  'world.openproductsfacts.org': 'Open Products Facts',
+  'world.openpetfoodfacts.org': 'Open Pet Food Facts',
+}
+/** Redirectors used by ValueCommerce (Yahoo!) and 楽天アフィリエイト links. */
+export const AFFILIATE_LINK_HOSTS: readonly string[] = ['ck.jp.ap.valuecommerce.com', 'hb.afl.rakuten.co.jp']
+
+/** Platform name and whether the link is an affiliate link, for an allowed item URL. */
+export function itemLink(raw: unknown): { url: string; platform: string; affiliate: boolean } | null {
+  const url = safeImageUrl(raw, Object.keys(ITEM_LINK_HOSTS))
+  if (!url) return null
+  const host = new URL(url).hostname
+  return { url, platform: ITEM_LINK_HOSTS[host], affiliate: AFFILIATE_LINK_HOSTS.includes(host) }
+}
 
 /** Hosts whose images may be copied into R2. */
 export const CACHED_IMAGE_HOSTS: readonly string[] = OPEN_FACTS.map(([, , images]) => images)
@@ -65,17 +92,19 @@ export function safeImageUrl(raw: unknown, hosts: readonly string[]): string | n
   }
 }
 
-export async function resolveYahoo(appId: string, code: string, fetchJson: FetchJson): Promise<ResolvedProduct | null> {
+/** affiliateId is a ValueCommerce affiliate ID (affiliate_type=vc); item URLs then carry it. */
+export async function resolveYahoo(appId: string, code: string, fetchJson: FetchJson, affiliateId?: string): Promise<ResolvedProduct | null> {
   const query = new URLSearchParams({ appid: appId, jan_code: code, results: '1', image_size: '300' })
+  if (affiliateId) { query.set('affiliate_type', 'vc'); query.set('affiliate_id', affiliateId) }
   const data = await fetchJson(`https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch?${query}`) as {
-    hits?: { name?: unknown; image?: { medium?: unknown; small?: unknown }; exImage?: { url?: unknown } }[]
+    hits?: { name?: unknown; url?: unknown; image?: { medium?: unknown; small?: unknown }; exImage?: { url?: unknown } }[]
   }
   const hit = data?.hits?.[0]
   if (!hit) return null
   const name = cleanShopName(hit.name)
   const thumbnailUrl = safeImageUrl(hit.exImage?.url, LINKED_IMAGE_HOSTS.yahoo) ??
     safeImageUrl(hit.image?.medium, LINKED_IMAGE_HOSTS.yahoo) ?? safeImageUrl(hit.image?.small, LINKED_IMAGE_HOSTS.yahoo)
-  return name || thumbnailUrl ? { source: 'yahoo', name, thumbnailUrl } : null
+  return name || thumbnailUrl ? { source: 'yahoo', name, thumbnailUrl, itemUrl: itemLink(hit.url)?.url ?? null } : null
 }
 
 /**
@@ -83,13 +112,16 @@ export async function resolveYahoo(appId: string, code: string, fetchJson: Fetch
  * carry it in their text. formatVersion=2 flattens items; image entries may be
  * strings or { imageUrl } depending on the format version.
  */
-export async function resolveRakuten(applicationId: string, accessKey: string, code: string, fetchJson: FetchJson): Promise<ResolvedProduct | null> {
+export async function resolveRakuten(applicationId: string, accessKey: string, code: string, fetchJson: FetchJson, affiliateId?: string): Promise<ResolvedProduct | null> {
   const query = new URLSearchParams({
     applicationId, accessKey, keyword: code, hits: '1', imageFlag: '1', formatVersion: '2',
-    elements: 'itemName,mediumImageUrls,smallImageUrls',
+    elements: 'itemName,itemUrl,affiliateUrl,mediumImageUrls,smallImageUrls',
   })
+  // With affiliateId the API also returns affiliateUrl (and itemUrl matches it).
+  if (affiliateId) query.set('affiliateId', affiliateId)
+  type Item = { itemName?: unknown; itemUrl?: unknown; affiliateUrl?: unknown; mediumImageUrls?: unknown[]; smallImageUrls?: unknown[] }
   const data = await fetchJson(`https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260701?${query}`) as {
-    items?: ({ itemName?: unknown; mediumImageUrls?: unknown[]; smallImageUrls?: unknown[] } & { item?: { itemName?: unknown; mediumImageUrls?: unknown[]; smallImageUrls?: unknown[] } })[]
+    items?: (Item & { item?: Item })[]
   }
   const raw = data?.items?.[0]
   const item = raw?.item ?? raw
@@ -101,7 +133,8 @@ export async function resolveRakuten(applicationId: string, accessKey: string, c
   }
   const name = cleanShopName(item.itemName)
   const thumbnailUrl = image(item.mediumImageUrls) ?? image(item.smallImageUrls)
-  return name || thumbnailUrl ? { source: 'rakuten', name, thumbnailUrl } : null
+  const itemUrl = itemLink(item.affiliateUrl)?.url ?? itemLink(item.itemUrl)?.url ?? null
+  return name || thumbnailUrl ? { source: 'rakuten', name, thumbnailUrl, itemUrl } : null
 }
 
 export const isIsbn = (code: string) => /^97[89]\d{10}$/.test(code)
@@ -136,7 +169,8 @@ export async function resolveOpenFacts(code: string, fetchJson: FetchJson): Prom
     const name = cleanName(product.product_name_ja) ?? cleanName(product.product_name) ?? cleanName(product.product_name_en) ??
       cleanName(product.generic_name) ?? cleanName(product.brands)
     const cacheImageUrl = safeImageUrl(product.image_front_small_url, [imageHost]) ?? safeImageUrl(product.image_small_url, [imageHost])
-    if (name || cacheImageUrl) return { source, name, cacheImageUrl }
+    // Link the (CC BY-SA) image back to its product page.
+    if (name || cacheImageUrl) return { source, name, cacheImageUrl, itemUrl: `https://${host}/product/${code}` }
   }
   return null
 }

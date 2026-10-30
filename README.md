@@ -185,6 +185,8 @@ GitHubリポジトリの **Settings → Secrets and variables → Actions** に
 npx wrangler secret put YAHOO_APP_ID         # 任意。Yahoo! JAPAN デベロッパーネットワークのClient ID
 npx wrangler secret put RAKUTEN_APP_ID       # 任意。楽天ウェブサービスのアプリID
 npx wrangler secret put RAKUTEN_ACCESS_KEY   # 任意。同じアプリのアクセスキー（両方そろったときに有効）
+npx wrangler secret put YAHOO_AFFILIATE_ID   # 任意。バリューコマースのアフィリエイトID（Yahoo!の商品リンクに付与）
+npx wrangler secret put RAKUTEN_AFFILIATE_ID # 任意。楽天アフィリエイトID（楽天の商品リンクに付与）
 ```
 
 ### 既存データの商品解決をやり直す
@@ -198,13 +200,17 @@ openssl rand -hex 32                     # 生成した値を両方に設定
 npx wrangler secret put ADMIN_TOKEN
 ```
 
-- `scope: missing`（既定）は、名前も画像もない行と、商品データのない王者のカード（2枚目を含む）が対象です。
+- `scope: missing`（既定）は、名前も画像もない行、商品ページのリンクがまだない行、
+  商品データのない王者のカード（2枚目を含む）が対象です。
   `scope: all` はキャッシュ済みの全商品をやり直します。
 - 管理API `POST /api/admin/products/refresh`（`Authorization: Bearer <ADMIN_TOKEN>`、
   本文 `{"scope":"missing","limit":5,"after":""}`）を、返る `next` を `after` に渡しながら `done` になるまで呼びます。
   1回あたりの件数は1〜20件です（Workersのサブリクエスト上限と、Yahoo!・楽天への連続アクセスの抑制を考慮）。
 - `ADMIN_TOKEN` を設定していないあいだ、管理APIは404を返します。
 
+Yahoo!ショッピング・楽天市場・Open Food Facts系で見つかった商品は、サムネイルと「〇〇で見る」リンクから
+取得元の商品ページへリンクします。アフィリエイトIDを設定した場合、そのリンクはアフィリエイトリンクになり、
+「（アフィリエイト）」と表示して`rel="sponsored"`を付け、フッターに利用しているプログラムを開示します。
 Amazon商品にはアフィリエイトリンクとアフィリエイトを含まない商品ページリンクを併記します。
 商品を特定できない場合は、バーコード（JAN/EAN/ISBN）でのAmazon検索リンクを併記します。
 外部サービスへの照会にバーコード番号を使用します。カメラ映像は使用しません。
