@@ -143,39 +143,23 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </section>
 
   <section class="console" aria-label="操作パネル">
-    <details class="guide" id="guide-box" open>
-      <summary>操作ガイド</summary>
-      <p class="guide-now" id="guide-now" aria-live="polite"></p>
-      <details class="guide-more"><summary>ボタンの役割</summary>
-      <dl class="guide-keys">
-        <dt>CARD IN</dt><dd>カメラか番号入力でカードを読み込みます。1P/2P・合体などの読み込み先を選べます。</dd>
-        <dt>L-BATTLE / R-BATTLE</dt><dd>自分の番に攻撃します。待機中はバトル開始（勝ち抜き部屋では挑戦）。</dd>
-        <dt>L-POWER / R-POWER</dt><dd>自分の番にPOWER（回復）を使います。薬草・魔法は下のパネルから使います。</dd>
-        <dt>SET</dt><dd>バトル・シナリオの開始、勝ち抜き部屋への挑戦。演出中は最後までスキップします（液晶のタップでも同じ）。</dd>
-        <dt>SELECT</dt><dd>C0 → C1 → C2 → 勝ち抜き部屋 の順にモードを切り替えます。</dd>
-        <dt>ON/OFF</dt><dd>リセットします。</dd>
-      </dl>
-      </details>
-    </details>
-    <div class="settings" role="group" aria-label="演出の設定">
-      <label>演出<select id="fx-mode"><option value="standard">標準</option><option value="device">実機再現（液晶・ビープ音）</option></select></label>
-      <label>バトル速度<select id="speed"><option value="0.5">ゆっくり</option><option value="1">ふつう（実機）</option><option value="2">はやい</option><option value="4">最速</option></select></label>
-      <label>音<select id="sound"><option value="on">ON</option><option value="off">OFF</option></select></label>
+    <p class="now" id="guide-now" aria-live="polite"></p>
+    <div class="mode-switch" role="group" aria-label="モード">
+      <button type="button" data-mode="VS" aria-pressed="true"><b>VS</b>勝ち抜き</button>
+      <button type="button" data-mode="C0"><b>C0</b>フリー</button>
+      <button type="button" data-mode="C1"><b>C1</b>冒険</button>
+      <button type="button" data-mode="C2"><b>C2</b>挑戦</button>
     </div>
-    <nav class="tabs" aria-label="画面"><button id="local-tab" type="button" aria-pressed="true">ローカル対戦</button><button id="rooms-tab" type="button" aria-pressed="false">勝ち抜き部屋</button></nav>
-    <div id="local-controls">
-      <div class="modes" role="group" aria-label="ゲームモード">
-        <button type="button" data-mode="C0" aria-pressed="true"><b>C0</b>フリー</button>
-        <button type="button" data-mode="C1"><b>C1</b>冒険</button>
-        <button type="button" data-mode="C2"><b>C2</b>挑戦</button>
+    <section class="pane" id="room-controls">
+      <header class="pane-head"><h2>部屋</h2><button id="refresh" class="mini" type="button">更新</button></header>
+      <div id="rooms"></div>
+    </section>
+    <section class="pane" id="local-controls" hidden>
+      <div id="campaign-setup" class="field-row" hidden>
+        <label>C2の敵バーコード（任意）<input id="enemy-barcode" inputmode="numeric" maxlength="18" placeholder="8桁または13桁"></label>
+        <label>パスワード（任意）<input id="password" inputmode="numeric" maxlength="5" placeholder="3桁または5桁"></label>
       </div>
-      <div id="campaign-setup" class="panel" hidden>
-        <div class="field-row">
-          <label>C2の敵バーコード（任意）<input id="enemy-barcode" inputmode="numeric" maxlength="18" placeholder="8桁または13桁"></label>
-          <label>パスワード（任意）<input id="password" inputmode="numeric" maxlength="5" placeholder="3桁または5桁"></label>
-        </div>
-      </div>
-      <div id="campaign-controls" class="panel" hidden>
+      <div id="campaign-controls" hidden>
         <p id="campaign-status"></p>
         <div class="field-row">
           <button id="switch-hero" type="button">戦士と魔法使いを交代</button>
@@ -183,7 +167,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <span id="world-controls"><select id="world" aria-label="C1ワールド"><option value="1">L-1</option><option value="2">L-2</option><option value="3">L-3</option><option value="4">L-4</option><option value="5">L-5</option><option value="H">L-H（鍵3個）</option></select><button id="set-world" type="button">ワールド移動</button></span>
         </div>
       </div>
-      <div id="battle-actions" class="panel" hidden>
+      <div id="battle-actions" hidden>
         <p id="turn"></p>
         <div class="field-row">
           <label>攻撃・POWERの強さ<select id="timing"><option value="1">通常</option><option value="2">強打</option></select></label>
@@ -192,24 +176,39 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         </div>
         <button id="auto" class="ghost" type="button">最後まで自動で戦う</button>
       </div>
-      <div class="field-row">
-        <button id="sample" class="ghost" type="button">サンプルカードで試す</button>
-      </div>
-    </div>
-    <div id="room-controls" hidden>
-      <button id="refresh" class="ghost" type="button">部屋を更新</button>
-      <div id="rooms"></div>
-    </div>
-    <div id="cards" class="cards"></div>
-    <details class="log-drawer"><summary>バトルログ</summary><ol id="log"></ol></details>
-  </section>
-  <section class="help"><details><summary>遊び方と注意</summary>
-    <p>ボタンの役割は操作パネル上部の「操作ガイド」にまとめています。光っているボタンがいま操作できます。</p>
+      <button id="sample" class="ghost" type="button">サンプルカードで試す</button>
+    </section>
+    <section class="pane">
+      <header class="pane-head"><h2 id="cards-title">カード</h2></header>
+      <div id="cards" class="cards"></div>
+    </section>
+    <details class="fold"><summary>バトルログ</summary><ol id="log"></ol></details>
+    <details class="fold"><summary>設定<small id="settings-summary"></small></summary>
+      <div class="setting" role="group" aria-label="演出"><span>演出</span>
+        <button type="button" data-setting="fx" data-value="standard">標準</button><button type="button" data-setting="fx" data-value="device">実機再現</button></div>
+      <div class="setting" role="group" aria-label="バトル速度"><span>速度</span>
+        <button type="button" data-setting="speed" data-value="0.5">ゆっくり</button><button type="button" data-setting="speed" data-value="1">ふつう</button><button type="button" data-setting="speed" data-value="2">はやい</button><button type="button" data-setting="speed" data-value="4">最速</button></div>
+      <div class="setting" role="group" aria-label="音"><span>音</span>
+        <button type="button" data-setting="sound" data-value="on">ON</button><button type="button" data-setting="sound" data-value="off">OFF</button></div>
+      <p class="setting-note">実機再現: 攻撃時のLED・液晶表示とビープ音を実機のタイミングで再現します。速度「ふつう」が実機と同じ速さです。</p>
+    </details>
+    <details class="fold"><summary>ボタンの役割</summary>
+      <dl class="guide-keys">
+        <dt>CARD IN</dt><dd>カメラか番号入力でカードを読み込みます。</dd>
+        <dt>L-BATTLE / R-BATTLE</dt><dd>自分の番に攻撃します。待機中はバトル開始（勝ち抜き部屋では挑戦）。</dd>
+        <dt>L-POWER / R-POWER</dt><dd>自分の番にPOWER（回復）を使います。薬草・魔法は操作パネルから使います。</dd>
+        <dt>SET</dt><dd>バトル・シナリオの開始、勝ち抜き部屋への挑戦。演出中は最後までスキップします（液晶のタップでも同じ）。</dd>
+        <dt>SELECT</dt><dd>勝ち抜き部屋 → C0 → C1 → C2 の順にモードを切り替えます。</dd>
+        <dt>ON/OFF</dt><dd>リセットします。</dd>
+      </dl>
+    </details>
+    <details class="fold"><summary>遊び方と注意</summary>
     <p>カードは種族0〜4がキャラカード（機械族・アニマル族・魚族・バード族・ヒューマン族）、5〜9がアイテムカード（武器・防具・HPアップ）です。職業0〜6は戦士、7〜9は魔法使いで、どちらになるかは読み込んだバーコードで決まります。</p>
     <p>SELECT でモードを切り替えます。C1/C2 は1人プレイです。CARD IN の読み込み先が「戦士」「魔法使い」に変わるので、戦士に職業0〜6のキャラカード、魔法使いに職業7〜9のキャラカード（任意）を読み込んで SET。C2 は SET 後に「C2の敵」へ敵のキャラカードを読み込みます。アイテムカードは直前に読み込んだキャラカードに合体します。</p>
     <p>カメラはHTTPSまたはlocalhostと、ブラウザの許可が必要です。映像は端末の中だけで解析し、サーバーへ送りません。読めないときは数字を入力できます。</p>
-    <p>「国内49コード」部屋は49で始まるコード専用です。49は商品の原産国を保証しません。商品名・画像は見つかった場合だけ表示します。逃走と戦闘後アイテムは未対応です。</p>
-  </details></section>
+    <p>「49戦」の部屋は49で始まるコード専用です。49は商品の原産国を保証しません。商品名・画像は見つかった場合だけ表示します。逃走と戦闘後アイテムは未対応です。</p>
+    </details>
+  </section>
   <footer><p>非公式ファンプロジェクト · 原作ゲーム・商標の権利は各権利者に帰属します</p><p id="amazon-disclosure" hidden>Amazonのアソシエイトとして、BarcodeBattler2-Simulator-Webは適格販売により収入を得ています。</p><p>商品データ: <a href="https://world.openfoodfacts.org/" target="_blank" rel="noreferrer">Open Food Facts</a>（ODbL / 画像 CC BY-SA）</p></footer>`
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
@@ -814,9 +813,9 @@ function render() {
   setKey.classList.toggle('ready', !setKey.disabled)
   setKey.setAttribute('aria-label', `SET（${playing() ? 'スキップ' : online ? '挑戦' : needsCampaign ? 'シナリオ開始' : 'バトル開始'}）`)
   $<HTMLButtonElement>('key-select').disabled = busy || fighting
-  $('key-select').setAttribute('aria-label', `SELECT（${online ? 'フリーバトルへ' : mode === 'C2' ? '勝ち抜き部屋へ' : 'モード切替'}）`)
+  $('key-select').setAttribute('aria-label', `SELECT（${online ? 'C0 フリーバトルへ' : mode === 'C2' ? '勝ち抜き部屋へ' : 'モード切替'}）`)
   $('key-onoff').setAttribute('aria-label', 'ON/OFF（リセット）')
-  $('guide-now').textContent = guideNow(needsCampaign)
+  $('guide-now').textContent = guideNow(needsCampaign).replace(/^いま: /, '')
   renderRoomBar()
   $('battle-actions').hidden = !battling() || playing()
   if (battling() && !playing() && duel) {
@@ -842,9 +841,14 @@ function render() {
   fuse.style.visibility = allowsSecond(currentRoom()) ? 'visible' : 'hidden'
   fuse.setAttribute('aria-pressed', String(target === 'left-card'))
   document.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach(button => {
-    button.setAttribute('aria-pressed', String(button.dataset.mode === mode))
-    button.disabled = fighting
+    button.setAttribute('aria-pressed', String(online ? button.dataset.mode === 'VS' : button.dataset.mode === mode))
+    button.disabled = fighting || busy
   })
+  $('local-controls').hidden = online
+  $('room-controls').hidden = !online
+  $('sample').hidden = mode !== 'C0'
+  $('cards-title').textContent = online ? 'あなたのカード' : 'カード'
+  renderSettings()
   $('campaign-setup').hidden = mode === 'C0' || !!campaign
 }
 
@@ -1180,13 +1184,19 @@ function setMode(next: Mode) {
 $('key-select').addEventListener('click', () => {
   unlockAudio()
   if (playing()) return
-  // SELECT cycles C0 → C1 → C2 → 勝ち抜き部屋 → C0.
+  // SELECT cycles 勝ち抜き部屋 → C0 → C1 → C2 → 勝ち抜き部屋.
   if (online) { setOnline(false); setMode('C0'); return }
   if (mode === 'C2') { setOnline(true); return }
   setMode(MODES[(MODES.indexOf(mode) + 1) % MODES.length])
 })
 document.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach(button => {
-  button.addEventListener('click', () => setMode((button.dataset.mode || 'C0') as Mode))
+  button.addEventListener('click', () => {
+    unlockAudio()
+    const next = button.dataset.mode || 'VS'
+    if (next === 'VS') { if (!online) setOnline(true); return }
+    if (online) setOnline(false)
+    setMode(next as Mode)
+  })
 })
 $('vs-fuse').addEventListener('click', () => {
   setTarget(target === 'left-card' ? 'left' : 'left-card')
@@ -1380,37 +1390,52 @@ $('room-prev').addEventListener('click', () => selectRoom(roomIndex - 1))
 $('room-next').addEventListener('click', () => selectRoom(roomIndex + 1))
 function renderRoomList() {
   $('rooms').replaceChildren(...rooms.map((room, index) => {
-    const card = document.createElement('article')
-    if (index === roomIndex) card.classList.add('selected')
-    const heading = document.createElement('h3')
-    heading.textContent = room.name
-    const description = document.createElement('p')
-    description.textContent = room.champion
-      ? `王者: ${room.champion.product?.name || room.champion.barcode} / ${room.champion.wins}連勝`
-      : '王者募集中 — 最初の挑戦者が王者になります'
-    const button = document.createElement('button')
-    button.type = 'button'
-    button.textContent = index === roomIndex ? '選択中' : 'この部屋を選ぶ'
-    button.disabled = busy || index === roomIndex
-    button.addEventListener('click', () => {
-      selectRoom(index)
+    const selected = index === roomIndex
+    const item = document.createElement('article')
+    item.className = selected ? 'room selected' : 'room'
+    // The room name and regulation form one button that picks the room.
+    const pick = document.createElement('button')
+    pick.type = 'button'
+    pick.className = 'room-pick'
+    pick.setAttribute('aria-pressed', String(selected))
+    pick.disabled = busy
+    const title = document.createElement('span')
+    title.className = 'room-title'
+    title.textContent = room.name
+    const rule = document.createElement('span')
+    rule.className = 'room-rule'
+    rule.textContent = regulationText(room)
+    pick.append(title, rule)
+    pick.addEventListener('click', () => {
+      if (!selected) selectRoom(index)
       document.querySelector('.bb2')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
+    const champion = document.createElement('div')
+    champion.className = 'room-champion'
     const product = room.champion?.product
     if (product?.thumbnail && validProductThumbnail(product.thumbnail)) {
       const image = document.createElement('img')
       image.src = product.thumbnail
       image.alt = product.name || room.champion!.barcode
       image.className = 'product-image'
-      card.append(image)
+      champion.append(image)
     }
-    const regulation = document.createElement('p')
-    regulation.textContent = `レギュレーション: ${regulationText(room)}`
-    card.append(heading, regulation, description)
-    if (room.champion) for (const code of [room.champion.barcode, room.champion.secondBarcode]) if (code) appendBarcode(card, code)
-    appendAmazonLinks(card, product)
-    card.append(button)
-    return card
+    const text = document.createElement('div')
+    const holder = document.createElement('p')
+    holder.textContent = room.champion
+      ? `王者 ${room.champion.product?.name || ''}${room.champion.product?.name ? ' ' : ''}${room.champion.wins}連勝`
+      : '王者募集中 — 最初の挑戦者が王者になります'
+    text.append(holder)
+    if (room.champion) {
+      const codes = document.createElement('div')
+      codes.className = 'barcodes'
+      for (const code of [room.champion.barcode, room.champion.secondBarcode]) if (code) appendBarcode(codes, code)
+      text.append(codes)
+    }
+    champion.append(text)
+    appendAmazonLinks(text, product)
+    item.append(pick, champion)
+    return item
   }))
 }
 async function refreshRooms() {
@@ -1507,10 +1532,6 @@ function setOnline(value: boolean) {
   if (battling()) clearDuel()
   online = value
   roomFight = null
-  $('local-tab').setAttribute('aria-pressed', String(!value))
-  $('rooms-tab').setAttribute('aria-pressed', String(value))
-  $('local-controls').hidden = value
-  $('room-controls').hidden = !value
   if (value) {
     setTarget('left')
     status('勝ち抜き部屋')
@@ -1519,21 +1540,29 @@ function setOnline(value: boolean) {
   render()
   if (value) void refreshRooms()
 }
-const showUnit = () => document.querySelector('.bb2')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-$('local-tab').addEventListener('click', () => { setOnline(false); showUnit() })
-$('rooms-tab').addEventListener('click', () => { setOnline(true); showUnit() })
 $('refresh').addEventListener('click', () => void refreshRooms())
-const guideBox = $<HTMLDetailsElement>('guide-box')
-try { if (localStorage.getItem('bb2-guide') === 'closed') guideBox.open = false } catch { /* Not persisted. */ }
-guideBox.addEventListener('toggle', () => { try { localStorage.setItem('bb2-guide', guideBox.open ? 'open' : 'closed') } catch { /* Not persisted. */ } })
-const fxSelect = $<HTMLSelectElement>('fx-mode'), speedSelect = $<HTMLSelectElement>('speed'), soundSelect = $<HTMLSelectElement>('sound')
-fxSelect.value = fxMode
-speedSelect.value = String(speed)
-soundSelect.value = soundEnabled() ? 'on' : 'off'
 function saveSettings() {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ fx: fxMode, speed, sound: soundEnabled() })) } catch { /* Not persisted. */ }
 }
-fxSelect.addEventListener('change', () => { fxMode = fxSelect.value === 'device' ? 'device' : 'standard'; saveSettings() })
-speedSelect.addEventListener('change', () => { speed = Number(speedSelect.value) || 1; saveSettings() })
-soundSelect.addEventListener('change', () => { setSoundEnabled(soundSelect.value === 'on'); unlockAudio(); saveSettings() })
-render()
+function settingValue(name: string) {
+  return name === 'fx' ? fxMode : name === 'speed' ? String(speed) : soundEnabled() ? 'on' : 'off'
+}
+function renderSettings() {
+  document.querySelectorAll<HTMLButtonElement>('[data-setting]').forEach(button => {
+    button.setAttribute('aria-pressed', String(settingValue(button.dataset.setting!) === button.dataset.value))
+  })
+  const label = (name: string) => document.querySelector(`[data-setting="${name}"][aria-pressed="true"]`)?.textContent ?? ''
+  $('settings-summary').textContent = `${label('fx')}・${label('speed')}・音${label('sound')}`
+}
+document.querySelectorAll<HTMLButtonElement>('[data-setting]').forEach(button => {
+  button.addEventListener('click', () => {
+    const value = button.dataset.value!
+    if (button.dataset.setting === 'fx') fxMode = value === 'device' ? 'device' : 'standard'
+    else if (button.dataset.setting === 'speed') speed = Number(value) || 1
+    else { setSoundEnabled(value === 'on'); unlockAudio() }
+    saveSettings()
+    renderSettings()
+  })
+})
+// 勝ち抜き部屋 (VS) is the default mode.
+setOnline(true)
