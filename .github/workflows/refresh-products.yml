@@ -1,0 +1,60 @@
+name: Refresh products
+
+# Re-resolves cached product names and thumbnails through the Worker's admin
+# API (POST /api/admin/products/refresh), batch by batch until every candidate
+# has been visited. Needs the same token as the Worker secret ADMIN_TOKEN in the
+# repository secret ADMIN_TOKEN.
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: missing = rows without a name or image (and champions without a row); all = every cached product
+        type: choice
+        options: [missing, all]
+        default: missing
+      batch:
+        description: Products per request (1-20; each may call several upstream APIs)
+        default: '5'
+      base_url:
+        description: Site to refresh
+        default: https://bb2.koudenpa.net
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refresh-products
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+      SCOPE: ${{ inputs.scope }}
+      BATCH: ${{ inputs.batch }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Re-resolve products
+        run: |
+          set -euo pipefail
+          if [ -z "$ADMIN_TOKEN" ]; then echo '::error::Set the repository secret ADMIN_TOKEN (same value as the Worker secret).'; exit 1; fi
+          after='' processed=0 resolved=0
+          for round in $(seq 1 1000); do
+            body=$(jq -nc --arg scope "$SCOPE" --argjson limit "$BATCH" --arg after "$after" '{scope: $scope, limit: $limit, after: $after}')
+            response=$(curl -fsS --retry 3 --retry-delay 5 -X POST "$BASE_URL/api/admin/products/refresh" \
+              -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' --data "$body")
+            processed=$((processed + $(jq '.processed' <<<"$response")))
+            resolved=$((resolved + $(jq '.resolved' <<<"$response")))
+            jq -r '.results[] | "\(.barcode)\t\(if .name then .name else "-" end)\t\(if .thumbnail then "image" else "" end)"' <<<"$response"
+            if [ "$(jq '.done' <<<"$response")" = true ]; then break; fi
+            after=$(jq -r '.next' <<<"$response")
+          done
+          {
+            echo '## Product refresh'
+            echo
+            echo "- scope: $SCOPE"
+            echo "- processed: $processed"
+            echo "- resolved (name or image): $resolved"
+          } >> "$GITHUB_STEP_SUMMARY"

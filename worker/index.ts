@@ -1,10 +1,15 @@
 import { battle as simulateBattle, combineFighters, decodeBarcode, validateBarcode } from '../src/game.ts'
 import { amazonAffiliateEnabled, amazonApiEnabled, amazonSearchLinks, AMAZON_ASSOCIATE_TAG, searchAmazonProduct, type AmazonEnv } from './amazon.ts'
-import { isIsbn, LINKED_IMAGE_HOSTS, resolveOpenBD, resolveOpenFacts, resolveYahoo } from './products.ts'
+import { isIsbn, LINKED_IMAGE_HOSTS, resolveOpenBD, resolveOpenFacts, resolveRakuten, resolveYahoo } from './products.ts'
 
 interface Env extends AmazonEnv {
   /** Yahoo! JAPAN Client ID for 商品検索 v3; enables the Yahoo!ショッピング lookup and its credit. */
   YAHOO_APP_ID?: string
+  /** 楽天ウェブサービス application ID and access key; both enable the 楽天市場 lookup and its credit. */
+  RAKUTEN_APP_ID?: string
+  RAKUTEN_ACCESS_KEY?: string
+  /** Bearer token for /api/admin/*; the admin API answers 404 while it is unset. */
+  ADMIN_TOKEN?: string
   DB: D1Database
   IMAGES: R2Bucket
   ASSETS: Fetcher
@@ -32,6 +37,11 @@ interface Room {
   champion_product_source?: string | null
   champion_product_asin?: string | null
   champion_thumbnail_url?: string | null
+  champion_second_name?: string | null
+  champion_second_has_thumbnail?: number | null
+  champion_second_source?: string | null
+  champion_second_asin?: string | null
+  champion_second_thumbnail_url?: string | null
 }
 
 interface ProductRow {
@@ -55,8 +65,12 @@ const SESSION_SECONDS = 365 * 24 * 60 * 60
 const encoder = new TextEncoder()
 const ROOM_SELECT = 'SELECT rooms.*, products.name AS champion_product_name, ' +
   'products.has_thumbnail AS champion_has_thumbnail, products.source AS champion_product_source, ' +
-  'products.asin AS champion_product_asin, products.thumbnail_url AS champion_thumbnail_url FROM rooms ' +
-  'LEFT JOIN products ON products.barcode = rooms.champion_barcode'
+  'products.asin AS champion_product_asin, products.thumbnail_url AS champion_thumbnail_url, ' +
+  'second.name AS champion_second_name, second.has_thumbnail AS champion_second_has_thumbnail, ' +
+  'second.source AS champion_second_source, second.asin AS champion_second_asin, ' +
+  'second.thumbnail_url AS champion_second_thumbnail_url FROM rooms ' +
+  'LEFT JOIN products ON products.barcode = rooms.champion_barcode ' +
+  'LEFT JOIN products AS second ON second.barcode = rooms.champion_second_barcode'
 
 function headers(api = true): Headers {
   const result = new Headers({
@@ -64,7 +78,7 @@ function headers(api = true): Headers {
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'same-origin',
     'Permissions-Policy': 'camera=(self), microphone=(), geolocation=()',
-    'Content-Security-Policy': `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://m.media-amazon.com https://images-fe.ssl-images-amazon.com https://images-jp.ssl-images-amazon.com https://images-na.ssl-images-amazon.com ${LINKED_IMAGE_HOSTS.yahoo.map(host => `https://${host}`).join(' ')} ${LINKED_IMAGE_HOSTS.openbd.map(host => `https://${host}`).join(' ')}; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`,
+    'Content-Security-Policy': `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://m.media-amazon.com https://images-fe.ssl-images-amazon.com https://images-jp.ssl-images-amazon.com https://images-na.ssl-images-amazon.com ${LINKED_IMAGE_HOSTS.yahoo.map(host => `https://${host}`).join(' ')} ${LINKED_IMAGE_HOSTS.rakuten.map(host => `https://${host}`).join(' ')} ${LINKED_IMAGE_HOSTS.openbd.map(host => `https://${host}`).join(' ')}; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`,
   })
   if (api) {
     result.set('Cache-Control', 'no-store')
@@ -226,6 +240,15 @@ function publicRoom(room: Room, owner: string | null, env: Env) {
         asin: room.champion_product_asin ?? null,
         thumbnail_url: room.champion_thumbnail_url ?? null,
       }),
+      secondProduct: room.champion_second_barcode ? productValue({
+        barcode: room.champion_second_barcode,
+        name: room.champion_second_name ?? null,
+        has_thumbnail: room.champion_second_has_thumbnail ?? 0,
+        checked_at: 0,
+        source: room.champion_second_source ?? 'none',
+        asin: room.champion_second_asin ?? null,
+        thumbnail_url: room.champion_second_thumbnail_url ?? null,
+      }) : null,
     } : null,
     updatedAt: room.updated_at,
   }
@@ -299,9 +322,9 @@ const MISSING_TTL = 6 * 3600
  * ISBNs, then Open Food / Beauty / Products / Pet Food Facts. Results, including
  * misses, are cached in D1; product data never decides a battle.
  */
-async function lookupProduct(env: Env, code: string) {
+async function lookupProduct(env: Env, code: string, force = false) {
   const cached = await env.DB.prepare('SELECT * FROM products WHERE barcode = ?').bind(code).first<ProductRow>()
-  if (cached) {
+  if (cached && !force) {
     const ttl = cached.source === 'amazon' ? AMAZON_TTL : cached.name || cached.has_thumbnail || cached.thumbnail_url ? FOUND_TTL : MISSING_TTL
     const amazonGone = cached.source === 'amazon' && !amazonApiEnabled(env)
     if (now() - cached.checked_at < ttl && !amazonGone) return productValue(cached)
@@ -315,6 +338,7 @@ async function lookupProduct(env: Env, code: string) {
     })
   }
   if (env.YAHOO_APP_ID) resolvers.push(() => resolveYahoo(env.YAHOO_APP_ID!, code, fetchJson))
+  if (rakutenEnabled(env)) resolvers.push(() => resolveRakuten(env.RAKUTEN_APP_ID!, env.RAKUTEN_ACCESS_KEY!, code, fetchJson))
   if (isIsbn(code)) resolvers.push(() => resolveOpenBD(code, fetchJson))
   resolvers.push(() => resolveOpenFacts(code, fetchJson))
 
@@ -355,6 +379,57 @@ async function lookupProduct(env: Env, code: string) {
     'checked_at = excluded.checked_at, source = excluded.source, asin = excluded.asin, thumbnail_url = excluded.thumbnail_url',
   ).bind(row.barcode, row.name, row.has_thumbnail, row.checked_at, row.source, row.asin, row.thumbnail_url).run()
   return productValue(row)
+}
+
+const rakutenEnabled = (env: Env) => !!(env.RAKUTEN_APP_ID && env.RAKUTEN_ACCESS_KEY)
+
+async function adminAuthorized(request: Request, env: Env): Promise<boolean> {
+  const token = env.ADMIN_TOKEN
+  const header = request.headers.get('Authorization') ?? ''
+  if (!token || !header.startsWith('Bearer ')) return false
+  // Compare digests so the check takes the same time whatever the input.
+  const [given, expected] = await Promise.all([hash(header.slice(7)), hash(token)])
+  let diff = 0
+  for (let i = 0; i < expected.length; i++) diff |= given.charCodeAt(i) ^ expected.charCodeAt(i)
+  return diff === 0
+}
+
+/**
+ * Re-resolve cached products in small batches, ignoring the cache: rows
+ * without a name or image (scope "missing", default) or every row ("all"),
+ * plus champion cards that have no product row. Barcodes are visited in
+ * order after `after`, so unresolvable rows never stall the run; callers
+ * repeat with the returned `next` until `done`.
+ */
+async function refreshProducts(request: Request, env: Env): Promise<Response> {
+  if (!env.ADMIN_TOKEN) throw new HttpError(404, 'NOT_FOUND', 'API route not found.')
+  if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.')
+  if (!await adminAuthorized(request, env)) throw new HttpError(401, 'UNAUTHORIZED', 'A valid admin token is required.')
+  const input = await body(request)
+  const scope = input.scope === 'all' ? 'all' : 'missing'
+  const limit = Math.max(1, Math.min(20, Number.isInteger(input.limit) ? input.limit as number : 5))
+  const after = typeof input.after === 'string' && /^\d{0,13}$/.test(input.after) ? input.after : ''
+  const rows = await env.DB.prepare(
+    'SELECT barcode FROM (' +
+    "SELECT barcode FROM products WHERE ?1 = 'all' OR (name IS NULL AND has_thumbnail = 0 AND thumbnail_url IS NULL) " +
+    'UNION SELECT champion_barcode FROM rooms WHERE champion_barcode IS NOT NULL AND champion_barcode NOT IN (SELECT barcode FROM products) ' +
+    'UNION SELECT champion_second_barcode FROM rooms WHERE champion_second_barcode IS NOT NULL AND champion_second_barcode NOT IN (SELECT barcode FROM products)' +
+    ') WHERE barcode > ?2 ORDER BY barcode LIMIT ?3',
+  ).bind(scope, after, limit).all<{ barcode: string }>()
+  let resolved = 0
+  const results: { barcode: string; name: string | null; thumbnail: boolean }[] = []
+  for (const [index, { barcode: code }] of rows.results.entries()) {
+    if (!validateBarcode(code)) continue
+    // Yahoo! allows about one query per second; 楽天 also throttles bursts.
+    if (index > 0 && (env.YAHOO_APP_ID || rakutenEnabled(env))) await new Promise(resolve => setTimeout(resolve, 1100))
+    let product: Awaited<ReturnType<typeof lookupProduct>> = null
+    try { product = await lookupProduct(env, code, true) } catch { /* Counted as unresolved. */ }
+    const found = !!(product?.name || product?.thumbnail)
+    if (found) resolved++
+    results.push({ barcode: code, name: product?.name ?? null, thumbnail: !!product?.thumbnail })
+  }
+  const last = rows.results.at(-1)?.barcode ?? null
+  return json({ scope, processed: rows.results.length, resolved, results, next: last, done: rows.results.length < limit })
 }
 
 async function challenge(request: Request, env: Env, roomId: string): Promise<Response> {
@@ -429,6 +504,8 @@ async function challenge(request: Request, env: Env, roomId: string): Promise<Re
   }
   let product = null
   try { product = await lookupProduct(env, code) } catch { /* Optional metadata must not invalidate committed battles. */ }
+  // Cache the second card's product too, so the room list can show it.
+  if (secondCode) try { await lookupProduct(env, secondCode) } catch { /* Optional metadata. */ }
   const updated: Room = {
     ...room, revision: room.revision + 1, champion_barcode: winnerBarcode, champion_second_barcode: winnerSecond, champion_fighter: winnerFighter,
     champion_owner_hash: winnerOwner, champion_wins: wins, last_battle_id: id, updated_at: timestamp,
@@ -449,6 +526,9 @@ async function challenge(request: Request, env: Env, roomId: string): Promise<Re
 async function api(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url)
   const path = url.pathname
+  // Admin calls come from CI or a terminal, not the page, so they skip the
+  // same-origin check and use a bearer token instead.
+  if (path === '/api/admin/products/refresh') return refreshProducts(request, env)
   if (request.method === 'POST' && request.headers.get('Origin') !== url.origin) {
     throw new HttpError(403, 'INVALID_ORIGIN', 'A same-origin request is required.')
   }
@@ -457,7 +537,7 @@ async function api(request: Request, env: Env): Promise<Response> {
     return initializeSession(request, env)
   }
   if (request.method === 'GET' && path === '/api/config') {
-    return json({ amazonAffiliateEnabled: amazonAffiliateEnabled(), yahooCredit: !!env.YAHOO_APP_ID })
+    return json({ amazonAffiliateEnabled: amazonAffiliateEnabled(), yahooCredit: !!env.YAHOO_APP_ID, rakutenCredit: rakutenEnabled(env) })
   }
   if (request.method === 'GET' && path === '/api/rooms') {
     const owner = await session(request, env)
@@ -494,6 +574,7 @@ async function api(request: Request, env: Env): Promise<Response> {
       product: await lookupProduct(env, code),
       amazonAffiliateEnabled: amazonAffiliateEnabled(),
       yahooCredit: !!env.YAHOO_APP_ID,
+      rakutenCredit: rakutenEnabled(env),
     }, 200, extra)
   }
   const imageMatch = /^\/api\/images\/(\d+)$/.exec(path)
