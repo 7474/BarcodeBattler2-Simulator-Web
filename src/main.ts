@@ -16,7 +16,7 @@ type Product = {
 type Room = {
   id: string; name: string; barcodePrefix: string | null
   secondCard?: 'none' | 'both'; allowHeal?: boolean; requireKnownProduct?: boolean
-  champion: { barcode: string; secondBarcode?: string | null; fighter?: Fighter; wins: number; isOwner?: boolean; product?: Product | null } | null
+  champion: { barcode: string; secondBarcode?: string | null; fighter?: Fighter; wins: number; isOwner?: boolean; product?: Product | null; secondProduct?: Product | null } | null
 }
 type RoomFight = { roomId: string; challenger: Fighter; champion: Fighter | null; winner: Side }
 type Side = 'left' | 'right'
@@ -729,6 +729,44 @@ function appendBarcode(parent: HTMLElement, code: string) {
   element.setAttribute('aria-label', `バーコード ${code}`)
   parent.append(element)
 }
+/**
+ * One physical card: product thumbnail, name (or a fallback label), barcode and
+ * Amazon links. Fused cards show one row per card so the second card's
+ * product is visible too.
+ */
+function productPart(code: string, role: string, product: Product | null | undefined, fallback = '') {
+  const part = document.createElement('div')
+  part.className = 'part'
+  if (product?.thumbnail && validProductThumbnail(product.thumbnail)) {
+    const image = document.createElement('img')
+    image.src = product.thumbnail
+    image.alt = product.name || code
+    image.className = 'product-image'
+    part.append(image)
+  }
+  const text = document.createElement('div')
+  text.className = 'part-text'
+  const name = product?.name || fallback
+  if (role || name) {
+    const label = document.createElement('p')
+    label.className = 'product-name'
+    if (role) {
+      const tag = document.createElement('span')
+      tag.className = 'part-role'
+      tag.textContent = role
+      label.append(tag)
+    }
+    if (name) label.append(document.createTextNode(name))
+    text.append(label)
+  }
+  const codes = document.createElement('div')
+  codes.className = 'barcodes'
+  appendBarcode(codes, code)
+  text.append(codes)
+  appendAmazonLinks(text, product)
+  part.append(text)
+  return part
+}
 /** The second card's own label (e.g. 武器（使い捨て）, 薬草アップ). */
 function secondName(side: Side, race: number) {
   const code = secondCards.get(side)
@@ -762,20 +800,16 @@ function renderCards() {
       card.append(empty)
       return card
     }
-    const product = products.get(fighter.barcode)
-    const body = document.createElement('div')
-    body.className = 'card-body'
-    if (product?.thumbnail && validProductThumbnail(product.thumbnail)) {
-      const image = document.createElement('img')
-      image.src = product.thumbnail
-      image.alt = product.name || fighter.barcode
-      image.className = 'product-image'
-      body.append(image)
-    }
-    const text = document.createElement('div')
-    const label = document.createElement('p')
-    label.className = 'product-name'
-    label.textContent = product?.name || (fighter.barcode === '0000000000000' ? 'シナリオの敵' : '')
+    const second = secondCards.get(side)
+    const parts = document.createElement('div')
+    parts.className = 'parts'
+    if (fighter.barcode === '0000000000000') {
+      const label = document.createElement('p')
+      label.className = 'product-name'
+      label.textContent = 'シナリオの敵'
+      parts.append(label)
+    } else parts.append(productPart(fighter.barcode, second ? '1枚目' : '', products.get(fighter.barcode)))
+    if (second) parts.append(productPart(second, '2枚目', products.get(second), secondName(side, fighter.race2 ?? 9)))
     const kind = document.createElement('p')
     kind.className = 'kind'
     const fused = combined.has(side) && fighter.race2 !== undefined
@@ -784,13 +818,7 @@ function renderCards() {
     const stats = document.createElement('p')
     stats.className = 'stats'
     stats.textContent = `HP ${fighter.hp} / ST ${fighter.attack} / DF ${fighter.defense} / 速さ ${fighter.speed} / MP ${fighter.mp} / 薬草 ${fighter.pp}`
-    const codes = document.createElement('div')
-    codes.className = 'barcodes'
-    for (const code of [fighter.barcode, secondCards.get(side)]) if (code) appendBarcode(codes, code)
-    text.append(...(label.textContent ? [label] : []), codes, kind, stats)
-    body.append(text)
-    card.append(body)
-    appendAmazonLinks(card, product)
+    card.append(parts, kind, stats)
     return card
   })
   $('cards').replaceChildren(...cards)
@@ -1418,28 +1446,14 @@ function renderRoomList() {
     })
     const champion = document.createElement('div')
     champion.className = 'room-champion'
-    const product = room.champion?.product
-    if (product?.thumbnail && validProductThumbnail(product.thumbnail)) {
-      const image = document.createElement('img')
-      image.src = product.thumbnail
-      image.alt = product.name || room.champion!.barcode
-      image.className = 'product-image'
-      champion.append(image)
-    }
-    const text = document.createElement('div')
     const holder = document.createElement('p')
-    holder.textContent = room.champion
-      ? `王者 ${room.champion.product?.name || ''}${room.champion.product?.name ? ' ' : ''}${room.champion.wins}連勝`
-      : '王者募集中 — 最初の挑戦者が王者になります'
-    text.append(holder)
+    holder.textContent = room.champion ? `王者 ${room.champion.wins}連勝` : '王者募集中 — 最初の挑戦者が王者になります'
+    champion.append(holder)
     if (room.champion) {
-      const codes = document.createElement('div')
-      codes.className = 'barcodes'
-      for (const code of [room.champion.barcode, room.champion.secondBarcode]) if (code) appendBarcode(codes, code)
-      text.append(codes)
+      const second = room.champion.secondBarcode
+      champion.append(productPart(room.champion.barcode, second ? '1枚目' : '', room.champion.product))
+      if (second) champion.append(productPart(second, '2枚目', room.champion.secondProduct))
     }
-    champion.append(text)
-    appendAmazonLinks(text, product)
     item.append(pick, champion)
     return item
   }))

@@ -32,6 +32,11 @@ interface Room {
   champion_product_source?: string | null
   champion_product_asin?: string | null
   champion_thumbnail_url?: string | null
+  champion_second_name?: string | null
+  champion_second_has_thumbnail?: number | null
+  champion_second_source?: string | null
+  champion_second_asin?: string | null
+  champion_second_thumbnail_url?: string | null
 }
 
 interface ProductRow {
@@ -55,8 +60,12 @@ const SESSION_SECONDS = 365 * 24 * 60 * 60
 const encoder = new TextEncoder()
 const ROOM_SELECT = 'SELECT rooms.*, products.name AS champion_product_name, ' +
   'products.has_thumbnail AS champion_has_thumbnail, products.source AS champion_product_source, ' +
-  'products.asin AS champion_product_asin, products.thumbnail_url AS champion_thumbnail_url FROM rooms ' +
-  'LEFT JOIN products ON products.barcode = rooms.champion_barcode'
+  'products.asin AS champion_product_asin, products.thumbnail_url AS champion_thumbnail_url, ' +
+  'second.name AS champion_second_name, second.has_thumbnail AS champion_second_has_thumbnail, ' +
+  'second.source AS champion_second_source, second.asin AS champion_second_asin, ' +
+  'second.thumbnail_url AS champion_second_thumbnail_url FROM rooms ' +
+  'LEFT JOIN products ON products.barcode = rooms.champion_barcode ' +
+  'LEFT JOIN products AS second ON second.barcode = rooms.champion_second_barcode'
 
 function headers(api = true): Headers {
   const result = new Headers({
@@ -226,6 +235,15 @@ function publicRoom(room: Room, owner: string | null, env: Env) {
         asin: room.champion_product_asin ?? null,
         thumbnail_url: room.champion_thumbnail_url ?? null,
       }),
+      secondProduct: room.champion_second_barcode ? productValue({
+        barcode: room.champion_second_barcode,
+        name: room.champion_second_name ?? null,
+        has_thumbnail: room.champion_second_has_thumbnail ?? 0,
+        checked_at: 0,
+        source: room.champion_second_source ?? 'none',
+        asin: room.champion_second_asin ?? null,
+        thumbnail_url: room.champion_second_thumbnail_url ?? null,
+      }) : null,
     } : null,
     updatedAt: room.updated_at,
   }
@@ -429,6 +447,8 @@ async function challenge(request: Request, env: Env, roomId: string): Promise<Re
   }
   let product = null
   try { product = await lookupProduct(env, code) } catch { /* Optional metadata must not invalidate committed battles. */ }
+  // Cache the second card's product too, so the room list can show it.
+  if (secondCode) try { await lookupProduct(env, secondCode) } catch { /* Optional metadata. */ }
   const updated: Room = {
     ...room, revision: room.revision + 1, champion_barcode: winnerBarcode, champion_second_barcode: winnerSecond, champion_fighter: winnerFighter,
     champion_owner_hash: winnerOwner, champion_wins: wins, last_battle_id: id, updated_at: timestamp,
