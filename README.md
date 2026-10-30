@@ -160,16 +160,28 @@ GitHubリポジトリの **Settings → Secrets and variables → Actions** に
 
 ## 商品情報
 
-Creators APIの認証情報がある場合はAmazonでバーコードを検索し、識別番号が一致した商品の
-名前とサムネイルを表示します。Amazonで解決できない場合はOpen Food Factsを検索します。
-食品以外や未登録商品はバーコード番号のまま表示します。検索障害で対戦は中断しません。
-Open Food Facts画像は許可した配信元から取得し、サイズ・形式を制限してR2にキャッシュします。
-Amazonの商品画像はAmazonが返す画像URLを利用します。Amazon商品にはアフィリエイトリンクと
-アフィリエイトを含まない商品ページリンクを併記します。商品を特定できない場合は、
-バーコード（JAN/EAN/ISBN）でのAmazon検索リンクを併記します。
-商品情報を表示する際は[Open Food Facts](https://world.openfoodfacts.org/)の
-[データ利用条件](https://world.openfoodfacts.org/terms-of-use)
-（データベースODbL、個別コンテンツDbCL、画像CC BY-SA）を確認してください。
+バーコードから商品名とサムネイルを、次の順に探します。名前が見つかった時点で止めますが、
+画像がなければ後の取得元で画像だけ補います。見つからない場合も含め、結果はD1にキャッシュします
+（見つかった商品は7日、Amazonは1日、見つからない場合は6時間）。検索障害で対戦は中断しません。
+
+1. Amazon（Creators APIの認証情報がある場合）。識別番号が一致した商品だけ採用します。
+2. [Yahoo!ショッピング 商品検索API v3](https://developer.yahoo.co.jp/webapi/shopping/v3/itemsearch.html)の
+   JANコード検索（Client IDを`YAHOO_APP_ID`に設定した場合）。国内商品に強く、名前先頭の【送料無料】などの表記は除きます。
+   画像はYahoo!の配信URLをそのまま表示し、保存しません。設定時はフッターに
+   [規定のクレジット](https://developer.yahoo.co.jp/attribution/)「Webサービス by Yahoo! JAPAN」を表示します。
+3. [openBD](https://openbd.jp/)（ISBN 978/979）。書名と書影（ある場合）を、改変せずに購入リンクと並べて表示します。
+   openBDのデータは[本の販促・紹介目的に限り利用できます](https://openbd.jp/terms/)。
+4. [Open Food Facts](https://world.openfoodfacts.org/)と姉妹DB（Open Beauty Facts、Open Products Facts、
+   Open Pet Food Facts）。日本語名を優先し、なければ英語名・一般名・ブランド名を使います。画像は許可した配信元から取得し、
+   サイズ・形式を制限してR2にキャッシュします。[データ利用条件](https://world.openfoodfacts.org/terms-of-use)
+   （データベースODbL、個別コンテンツDbCL、画像CC BY-SA）に従ってください。
+
+```sh
+npx wrangler secret put YAHOO_APP_ID   # 任意。Yahoo! JAPAN デベロッパーネットワークのClient ID
+```
+
+Amazon商品にはアフィリエイトリンクとアフィリエイトを含まない商品ページリンクを併記します。
+商品を特定できない場合は、バーコード（JAN/EAN/ISBN）でのAmazon検索リンクを併記します。
 外部サービスへの照会にバーコード番号を使用します。カメラ映像は使用しません。
 
 ## ライセンス

@@ -3,6 +3,7 @@ import './style.css'
 import { createBattle, combineFighters, decodeBarcode, jobName, MAGIC_COSTS, RACE_NAMES, type BattleAction, type BattleSession, type Fighter } from './game.ts'
 import { campaignEnemy, createCampaign, finishCampaignBattle, selectCampaignWorld, setCampaignEnemy, switchCampaignHero, type Campaign } from './campaign.ts'
 import { beep, playTones, setSoundEnabled, soundEnabled, SOUNDS, unlockAudio, type Tone } from './sound.ts'
+import { LINKED_IMAGE_HOSTS } from '../worker/products.ts'
 import { cameraErrorMessage, interpretScan, requestBarcodeCamera, startBarcodeCamera, type CameraSession } from './scan.ts'
 
 type Product = {
@@ -209,7 +210,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <p>「49戦」の部屋は49で始まるコード専用です。49は商品の原産国を保証しません。商品名・画像は見つかった場合だけ表示します。逃走と戦闘後アイテムは未対応です。</p>
     </details>
   </section>
-  <footer><p>非公式ファンプロジェクト · 原作ゲーム・商標の権利は各権利者に帰属します</p><p id="amazon-disclosure" hidden>Amazonのアソシエイトとして、BarcodeBattler2-Simulator-Webは適格販売により収入を得ています。</p><p>商品データ: <a href="https://world.openfoodfacts.org/" target="_blank" rel="noreferrer">Open Food Facts</a>（ODbL / 画像 CC BY-SA）</p></footer>`
+  <footer><p>非公式ファンプロジェクト · 原作ゲーム・商標の権利は各権利者に帰属します</p><p id="amazon-disclosure" hidden>Amazonのアソシエイトとして、BarcodeBattler2-Simulator-Webは適格販売により収入を得ています。</p><p>商品データ: <a href="https://world.openfoodfacts.org/" target="_blank" rel="noreferrer">Open Food Facts</a>・<a href="https://world.openbeautyfacts.org/" target="_blank" rel="noreferrer">Open Beauty Facts</a>・<a href="https://world.openproductsfacts.org/" target="_blank" rel="noreferrer">Open Products Facts</a>・<a href="https://world.openpetfoodfacts.org/" target="_blank" rel="noreferrer">Open Pet Food Facts</a>（ODbL / 画像 CC BY-SA）</p><p>書誌・書影: <a href="https://openbd.jp/" target="_blank" rel="noreferrer">openBD</a></p><p id="yahoo-credit" hidden><!-- Begin Yahoo! JAPAN Web Services Attribution Snippet -->
+<span style="margin:15px 15px 15px 15px"><a href="https://developer.yahoo.co.jp/sitemap/">Webサービス by Yahoo! JAPAN</a></span>
+<!-- End Yahoo! JAPAN Web Services Attribution Snippet --></p></footer>`
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const slots: { left: Fighter | null; right: Fighter | null } = { left: null, right: null }
@@ -345,6 +348,8 @@ function validProductThumbnail(value: string | null | undefined) {
       'images-fe.ssl-images-amazon.com',
       'images-jp.ssl-images-amazon.com',
       'images-na.ssl-images-amazon.com',
+      ...LINKED_IMAGE_HOSTS.yahoo,
+      ...LINKED_IMAGE_HOSTS.openbd,
     ].includes(url.hostname)
   } catch {
     return false
@@ -969,8 +974,9 @@ async function loadBarcode(barcode: string) {
     const lookup = (async () => {
       try {
         await ensureSession()
-        const result = await api<{ product: Product | null; amazonAffiliateEnabled: boolean }>(`/api/products/${fighter.barcode}`)
+        const result = await api<{ product: Product | null; amazonAffiliateEnabled: boolean; yahooCredit?: boolean }>(`/api/products/${fighter.barcode}`)
         $('amazon-disclosure').hidden = !result.amazonAffiliateEnabled
+        $('yahoo-credit').hidden = !result.yahooCredit
         if (result.product) products.set(fighter.barcode, result.product)
       } catch { /* Product lookup must not prevent local play. */ }
     })()
@@ -1493,8 +1499,8 @@ async function challengeCurrent() {
   status(`${room.name}に挑戦中…`)
   render()
   renderRoomList()
-  void api<{ amazonAffiliateEnabled: boolean }>('/api/config')
-    .then(config => { $('amazon-disclosure').hidden = !config.amazonAffiliateEnabled })
+  void api<{ amazonAffiliateEnabled: boolean; yahooCredit?: boolean }>('/api/config')
+    .then(config => { $('amazon-disclosure').hidden = !config.amazonAffiliateEnabled; $('yahoo-credit').hidden = !config.yahooCredit })
     .catch(() => {})
   try {
     await ensureSession()
@@ -1566,3 +1572,6 @@ document.querySelectorAll<HTMLButtonElement>('[data-setting]').forEach(button =>
 })
 // 勝ち抜き部屋 (VS) is the default mode.
 setOnline(true)
+void api<{ amazonAffiliateEnabled: boolean; yahooCredit?: boolean }>('/api/config')
+  .then(config => { $('amazon-disclosure').hidden = !config.amazonAffiliateEnabled; $('yahoo-credit').hidden = !config.yahooCredit })
+  .catch(() => {})

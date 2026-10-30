@@ -1,0 +1,67 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { cleanShopName, isIsbn, resolveOpenBD, resolveOpenFacts, resolveYahoo, safeImageUrl } from '../worker/products.ts'
+
+const routes = (table: Record<string, unknown>) => {
+  const calls: string[] = []
+  const fetchJson = async (url: string) => {
+    calls.push(url)
+    const key = Object.keys(table).find(prefix => url.startsWith(prefix))
+    if (!key) throw new Error(`unexpected ${url}`)
+    const value = table[key]
+    if (value instanceof Error) throw value
+    return value
+  }
+  return { fetchJson, calls }
+}
+
+test('Yahoo!ショッピング: JAN search, shop tags stripped, only Yahoo image hosts', async () => {
+  const { fetchJson, calls } = routes({
+    'https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch': {
+      hits: [{ name: '【送料無料】 サントリー 天然水 550ml ★お得★', exImage: { url: 'https://item-shopping.c.yimg.jp/i/n/store_item' }, image: { medium: 'https://evil.example/x.jpg' } }],
+    },
+  })
+  const result = await resolveYahoo('app', '4901777018686', fetchJson)
+  assert.deepEqual(result, { source: 'yahoo', name: 'サントリー 天然水 550ml', thumbnailUrl: 'https://item-shopping.c.yimg.jp/i/n/store_item' })
+  assert.match(calls[0], /jan_code=4901777018686/)
+  assert.match(calls[0], /appid=app/)
+  assert.equal(await resolveYahoo('app', '4901777018686', routes({ 'https://shopping.yahooapis.jp/': { hits: [] } }).fetchJson), null)
+})
+
+test('openBD: ISBN only, title and cover', async () => {
+  assert.equal(isIsbn('9784088820255'), true)
+  assert.equal(isIsbn('4901777018686'), false)
+  const { fetchJson, calls } = routes({
+    'https://api.openbd.jp/v1/get': [{ summary: { title: 'ONE PIECE 1', cover: 'https://cover.openbd.jp/9784088820255.jpg' } }],
+  })
+  assert.deepEqual(await resolveOpenBD('9784088820255', fetchJson), { source: 'openbd', name: 'ONE PIECE 1', thumbnailUrl: 'https://cover.openbd.jp/9784088820255.jpg' })
+  assert.equal(await resolveOpenBD('4901777018686', fetchJson), null)
+  assert.equal(calls.length, 1)
+  assert.equal(await resolveOpenBD('9784088820255', routes({ 'https://api.openbd.jp/': [null] }).fetchJson), null)
+})
+
+test('Open Facts: Japanese name first, falls through sister databases and errors', async () => {
+  const food = routes({
+    'https://world.openfoodfacts.org/': { status: 1, product: { product_name_ja: 'コカ・コーラ', product_name: 'Coca-Cola', image_front_small_url: 'https://images.openfoodfacts.org/images/products/490/210/207/2618/front_ja.5.200.jpg' } },
+  })
+  assert.deepEqual(await resolveOpenFacts('4902102072618', food.fetchJson), {
+    source: 'openfoodfacts', name: 'コカ・コーラ',
+    cacheImageUrl: 'https://images.openfoodfacts.org/images/products/490/210/207/2618/front_ja.5.200.jpg',
+  })
+  const beauty = routes({
+    'https://world.openfoodfacts.org/': new Error('timeout'),
+    'https://world.openbeautyfacts.org/': { status: 1, product: { product_name: '', brands: 'Kao', image_small_url: 'https://images.openfoodfacts.org/wrong-host.jpg' } },
+  })
+  assert.deepEqual(await resolveOpenFacts('4901301000000', beauty.fetchJson), { source: 'openbeautyfacts', name: 'Kao', cacheImageUrl: null })
+  const none = routes({ 'https://world.': { status: 0 } })
+  assert.equal(await resolveOpenFacts('4901301000000', none.fetchJson), null)
+  assert.equal(none.calls.length, 4)
+})
+
+test('image URLs must be https on an allowed host; shop names keep text when only tags', () => {
+  assert.equal(safeImageUrl('http://cover.openbd.jp/a.jpg', ['cover.openbd.jp']), 'https://cover.openbd.jp/a.jpg')
+  assert.equal(safeImageUrl('https://cover.openbd.jp:8443/a.jpg', ['cover.openbd.jp']), null)
+  assert.equal(safeImageUrl('https://user@cover.openbd.jp/a.jpg', ['cover.openbd.jp']), null)
+  assert.equal(safeImageUrl('javascript:alert(1)', ['cover.openbd.jp']), null)
+  assert.equal(cleanShopName('【限定】'), '【限定】')
+})
