@@ -2,6 +2,7 @@ import '@fontsource/libre-barcode-ean13-text/400.css'
 import './style.css'
 import { createBattle, combineFighters, decodeBarcode, jobName, MAGIC_COSTS, RACE_NAMES, type BattleAction, type BattleSession, type Fighter } from './game.ts'
 import { campaignEnemy, createCampaign, finishCampaignBattle, selectCampaignWorld, setCampaignEnemy, switchCampaignHero, type Campaign } from './campaign.ts'
+import { decodeRecord, encodeRecord, type LocalRecord } from './permalink.ts'
 import { beep, playTones, setSoundEnabled, soundEnabled, SOUNDS, unlockAudio, type Tone } from './sound.ts'
 import { itemLink, LINKED_IMAGE_HOSTS } from '../worker/products.ts'
 import { cameraErrorMessage, interpretScan, requestBarcodeCamera, startBarcodeCamera, type CameraSession } from './scan.ts'
@@ -147,6 +148,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 
   <section class="console" aria-label="操作パネル">
     <p class="now" id="guide-now" aria-live="polite"></p>
+    <section class="pane shared" id="shared-pane" hidden>
+      <header class="pane-head"><h2>共有されたバトル</h2><button id="shared-close" class="mini" type="button">閉じる</button></header>
+      <p class="shared-title" id="shared-title"></p>
+      <div id="shared-cards" class="shared-cards"></div>
+      <p class="shared-result" id="shared-result"></p>
+      <div class="field-row"><button id="shared-play" type="button">▶ 再生</button><button id="shared-share" class="ghost" type="button">リンクを共有</button></div>
+      <p class="share-note" id="shared-note" aria-live="polite"></p>
+    </section>
     <div class="mode-switch" role="group" aria-label="モード">
       <button type="button" data-mode="VS" aria-pressed="true"><b>VS</b>勝ち抜き</button>
       <button type="button" data-mode="C0"><b>C0</b>フリー</button>
@@ -184,6 +193,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <section class="pane">
       <header class="pane-head"><h2 id="cards-title">カード</h2></header>
       <div id="cards" class="cards"></div>
+      <div class="share-row" id="share-row" hidden>
+        <button id="share-battle" class="ghost" type="button">このバトルのリンクを共有</button>
+        <p class="share-note" id="share-note" aria-live="polite"></p>
+      </div>
     </section>
     <details class="fold"><summary>バトルログ</summary><ol id="log"></ol></details>
     <details class="fold"><summary>設定<small id="settings-summary"></small></summary>
@@ -685,8 +698,25 @@ async function animateCardError(isItem: boolean) {
   }
 }
 
+type ViewSide = { label: string; fighter: Fighter | null; barcode: string; secondBarcode?: string | null; product?: Product | null; secondProduct?: Product | null }
+/** A battle opened from a permalink (/battles/<id> or /replay#<data>); 1P is always the left side. */
+type SharedView = { url: string; title: string; when: number; left: ViewSide; right: ViewSide | null; lines: string[]; finalHp: { left: number; right: number }; winner: Side; rounds: number }
+let shared: SharedView | null = null
+let rememberedDuel: BattleSession | null = null
+let sharedReplayed = false
+/** Permalink of the battle that just finished here, offered for sharing. */
+let lastShareUrl: string | null = null
+let lastShareTitle = ''
+const atHp = (fighter: Fighter | null, hp?: number) => fighter && { ...fighter, maxHp: fighter.maxHp ?? fighter.hp, hp: hp ?? fighter.maxHp ?? fighter.hp }
+
 function lcdSides(): { left: Fighter | null; right: Fighter | null } {
   if (playback) { const frame = playback.frames[playback.index]; return { left: frame.left, right: frame.right } }
+  if (shared) {
+    return {
+      left: atHp(shared.left.fighter, sharedReplayed ? shared.finalHp.left : undefined),
+      right: atHp(shared.right?.fighter ?? null, sharedReplayed ? shared.finalHp.right : undefined),
+    }
+  }
   if (!online) return slots
   const room = currentRoom()
   if (roomFight && room && roomFight.roomId === room.id) return { left: roomFight.challenger, right: roomFight.champion }
@@ -927,16 +957,16 @@ function render() {
     const canAct = !playing() && controllable(side)
     const fighter = duel?.snapshot()[side]
     const herbsBlocked = !!duel?.snapshot().herbsBlocked[side]
-    const startable = playing() ? false : online ? side === 'left' && canChallenge() : !fighting && readyToFight() && (side === 'left' || !campaign)
+    const startable = playing() ? false : shared ? side === 'left' : online ? side === 'left' && canChallenge() : !fighting && readyToFight() && (side === 'left' || !campaign)
     $<HTMLButtonElement>(`${prefix}-battle`).disabled = !(canAct || startable)
     $<HTMLButtonElement>(`${prefix}-power`).disabled = !canAct || !fighter || fighter.pp === 0 || herbsBlocked
     document.querySelector(`.grip-${prefix}`)!.classList.toggle('active', canAct || startable)
   }
   const setKey = $<HTMLButtonElement>('key-set')
   const needsCampaign = mode !== 'C0' && !campaign
-  setKey.disabled = playing() ? false : online ? !canChallenge() : busy || fighting || (needsCampaign ? !slots.left : !readyToFight())
+  setKey.disabled = playing() || shared ? false : online ? !canChallenge() : busy || fighting || (needsCampaign ? !slots.left : !readyToFight())
   setKey.classList.toggle('ready', !setKey.disabled)
-  setKey.setAttribute('aria-label', `SET（${playing() ? 'スキップ' : online ? '挑戦' : needsCampaign ? 'シナリオ開始' : 'バトル開始'}）`)
+  setKey.setAttribute('aria-label', `SET（${playing() ? 'スキップ' : shared ? '再生' : online ? '挑戦' : needsCampaign ? 'シナリオ開始' : 'バトル開始'}）`)
   $<HTMLButtonElement>('key-select').disabled = busy || fighting
   $('key-select').setAttribute('aria-label', `SELECT（${online ? 'C0 フリーバトルへ' : mode === 'C2' ? '勝ち抜き部屋へ' : 'モード切替'}）`)
   $('key-onoff').setAttribute('aria-label', 'ON/OFF（リセット）')
@@ -973,12 +1003,14 @@ function render() {
   $('room-controls').hidden = !online
   $('sample').hidden = mode !== 'C0'
   $('cards-title').textContent = online ? 'あなたのカード' : 'カード'
+  renderShared()
   renderSettings()
   $('campaign-setup').hidden = mode === 'C0' || !!campaign
 }
 
 /** The next thing to do, shown in the guide outside the unit (never on the LCD message). */
 function guideNow(needsCampaign: boolean) {
+  if (shared && !playing()) return 'いま: 共有されたバトルを表示中です。SET か「再生」で液晶に再生します。「閉じる」でゲームに戻ります。'
   if (playing()) return 'いま: 演出中。SET か液晶のタップで最後までスキップできます。'
   if (online) {
     if (!challenger()) return `いま: CARD IN で1Pのキャラカードを読み込みます。${allowsSecond(currentRoom()) ? 'この部屋は2枚目（アイテムカードか合体するキャラカード）も使えます。' : 'この部屋はキャラカード1枚のみです。'}`
@@ -1027,6 +1059,7 @@ function nextTargetAfter(side: Side, wasCard: boolean) {
 }
 
 async function loadBarcode(barcode: string) {
+  closeShared()
   skipPlayback()
   try {
     const interpreted = interpretScan(barcode)
@@ -1125,6 +1158,7 @@ function startBattle() {
       slots.right = campaignEnemy(campaign)
     }
     duelOriginal = { left: slots.left!, right: slots.right! }
+    lastShareUrl = null
     duel = createBattle(slots.left!, slots.right!, Math.random, { star: campaign?.star ?? guardianStar })
     guardianStar = duel.snapshot().star
     campaignDuelResolved = false
@@ -1168,6 +1202,10 @@ function showDuel(newLines: string[]) {
   log(snapshot.log)
   flashIndicators(indicatorsFor(newLines))
   const summary = summarize(newLines)
+  if (snapshot.result && duelOriginal && rememberedDuel !== duel) {
+    rememberedDuel = duel
+    void rememberLocalBattle(duelOriginal, snapshot)
+  }
   if (snapshot.result) {
     const winner = sideName(snapshot.result.winner)
     status(`${winner} WIN! — ${snapshot.rounds}手で決着`)
@@ -1248,6 +1286,7 @@ async function replayDuel(from: number, frames: Frame[], next: (() => void) | nu
 function grip(side: Side, button: 'battle' | 'power') {
   unlockAudio()
   if (playing()) return
+  if (shared) { if (button === 'battle') void replayShared(); return }
   if (online) {
     if (side === 'left' && button === 'battle') void challengeCurrent()
     return
@@ -1274,6 +1313,7 @@ $('auto').addEventListener('click', () => {
 $('key-set').addEventListener('click', () => {
   unlockAudio()
   if (playing()) skipPlayback()
+  else if (shared) void replayShared()
   else if (online) void challengeCurrent()
   else startBattle()
 })
@@ -1296,6 +1336,7 @@ function resetAll(message = 'カード待ち') {
 }
 $('key-onoff').addEventListener('click', () => {
   unlockAudio()
+  closeShared()
   skipPlayback()
   resetAll()
   void animatePowerOn()
@@ -1315,6 +1356,7 @@ function setMode(next: Mode) {
 $('key-select').addEventListener('click', () => {
   unlockAudio()
   if (playing()) return
+  closeShared()
   // SELECT cycles 勝ち抜き部屋 → C0 → C1 → C2 → 勝ち抜き部屋.
   if (online) { setOnline(false); setMode('C0'); return }
   if (mode === 'C2') { setOnline(true); return }
@@ -1323,6 +1365,7 @@ $('key-select').addEventListener('click', () => {
 document.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach(button => {
   button.addEventListener('click', () => {
     unlockAudio()
+    closeShared()
     const next = button.dataset.mode || 'VS'
     if (next === 'VS') { if (!online) setOnline(true); return }
     if (online) setOnline(false)
@@ -1492,7 +1535,7 @@ window.addEventListener('pagehide', stopCamera)
 document.addEventListener('visibilitychange', () => { if (document.hidden && cameraSession) stopCamera() })
 
 function renderRoomBar() {
-  $('room-bar').hidden = !online
+  $('room-bar').hidden = !online || !!shared
   if (!online) return
   const room = currentRoom()
   $<HTMLButtonElement>('room-prev').disabled = busy || rooms.length < 2
@@ -1598,6 +1641,137 @@ function roomFrames(lines: string[], challenger: Fighter, champion: Fighter | nu
   frames.push({ left: at(challenger, finalHp.left, maxLeft), right: at(champion, finalHp.right, maxRight), lines: [] })
   return frames
 }
+async function shareLink(url: string, title: string, note: HTMLElement) {
+  note.textContent = ''
+  if (navigator.share) {
+    try { await navigator.share({ url, title }); return } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(url)
+    note.textContent = 'リンクをコピーしました'
+  } catch {
+    note.textContent = url
+  }
+}
+/** Keep a /replay#<data> permalink for a finished local battle; nothing is sent to the server. */
+async function rememberLocalBattle(original: { left: Fighter; right: Fighter }, snapshot: ReturnType<BattleSession['snapshot']>) {
+  if (!snapshot.result) return
+  const title = campaign ? `${MODE_NAMES[mode]}（${campaign.enemyName}）` : MODE_NAMES[mode]
+  const record: LocalRecord = {
+    v: 1, title,
+    left: { fighter: { ...original.left, maxHp: original.left.maxHp ?? original.left.hp }, barcode: heroCards.get('left') ?? original.left.barcode, secondBarcode: secondCards.get('left') ?? null },
+    right: { fighter: { ...original.right, maxHp: original.right.maxHp ?? original.right.hp }, barcode: campaign ? original.right.barcode : heroCards.get('right') ?? original.right.barcode, secondBarcode: campaign ? null : secondCards.get('right') ?? null },
+    lines: snapshot.log, finalHp: [snapshot.left.hp, snapshot.right.hp], winner: snapshot.result.winner, at: Math.floor(Date.now() / 1000),
+  }
+  try {
+    lastShareUrl = `${location.origin}/replay#${await encodeRecord(record)}`
+    lastShareTitle = `${title}: ${record.left.fighter.name} vs ${record.right.fighter.name}`
+  } catch {
+    lastShareUrl = null
+  }
+  render()
+}
+function viewSide(label: string, raw: { barcode: string; secondBarcode?: string | null; fighter: Fighter | null; product?: Product | null; secondProduct?: Product | null }): ViewSide {
+  return { label, ...raw, product: raw.product ?? products.get(raw.barcode), secondProduct: raw.secondProduct ?? (raw.secondBarcode ? products.get(raw.secondBarcode) : null) }
+}
+type RoomBattle = {
+  id: string; room: { id: string; name: string }; createdAt: number; rounds: number; log: string[]; leftHp: number; rightHp: number
+  winner: 'challenger' | 'defender'
+  challenger: { barcode: string; secondBarcode: string | null; fighter: Fighter | null; product: Product | null; secondProduct: Product | null } | null
+  defender: RoomBattle['challenger']
+}
+/** Open the permalink in the address bar, if any. */
+async function openPermalink() {
+  const roomBattle = /^\/battles\/([0-9a-f-]{36})$/.exec(location.pathname)
+  const local = location.pathname === '/replay' && location.hash.length > 1
+  if (!roomBattle && !local) return
+  try {
+    if (roomBattle) {
+      const battle = await api<RoomBattle>(`/api/battles/${roomBattle[1]}`)
+      if (!battle.challenger?.fighter) throw new Error('missing fighter')
+      shared = {
+        url: `${location.origin}/battles/${battle.id}`, title: `勝ち抜き部屋「${battle.room.name}」`, when: battle.createdAt,
+        left: viewSide('挑戦者', battle.challenger), right: battle.defender ? viewSide('王者', battle.defender) : null,
+        lines: battle.log.map(fromChampionView), finalHp: { left: battle.rightHp, right: battle.leftHp },
+        winner: battle.winner === 'challenger' ? 'left' : 'right', rounds: battle.rounds,
+      }
+    } else {
+      const record = await decodeRecord(location.hash.slice(1))
+      shared = {
+        url: location.href, title: record.title, when: record.at,
+        left: viewSide('', record.left), right: viewSide('', record.right),
+        lines: record.lines, finalHp: { left: record.finalHp[0], right: record.finalHp[1] },
+        winner: record.winner, rounds: record.lines.filter(line => /^[12]P (攻撃|MISS|回復|F\d)/.test(line)).length,
+      }
+      // Product names are looked up as for scanned cards (best effort).
+      for (const code of [record.left.barcode, record.left.secondBarcode, record.right.barcode, record.right.secondBarcode]) {
+        if (!code || /^0+$/.test(code) || products.has(code)) continue
+        void ensureSession().then(() => api<{ product: Product | null }>(`/api/products/${code}`))
+          .then(result => { if (result.product && shared) { products.set(code, result.product); shared = { ...shared, left: viewSide(shared.left.label, shared.left), right: shared.right && viewSide(shared.right.label, shared.right) }; render() } })
+          .catch(() => {})
+      }
+    }
+    sharedReplayed = false
+    log(shared.lines)
+    status('共有されたバトル')
+  } catch {
+    shared = null
+    history.replaceState(null, '', '/')
+    status('共有されたバトルを読み込めませんでした')
+  }
+  render()
+}
+async function replayShared() {
+  if (!shared || playing()) return
+  const view = shared
+  const frames = roomFrames(view.lines, view.left.fighter!, view.right?.fighter ?? null, view.finalHp)
+  sharedReplayed = false
+  status('バトル開始！')
+  await play(frames)
+  if (shared !== view) return
+  sharedReplayed = true
+  status(`${sharedWinner(view)}の勝ち — ${view.rounds}手`)
+  render()
+}
+const sharedWinner = (view: SharedView) => (view.winner === 'left' ? view.left.label || '1P' : view.right?.label || '2P')
+function closeShared() {
+  if (!shared) return
+  skipPlayback()
+  shared = null
+  sharedReplayed = false
+  if (location.pathname !== '/' || location.hash) history.replaceState(null, '', '/')
+  render()
+}
+function renderShared() {
+  $('shared-pane').hidden = !shared
+  $('share-row').hidden = !lastShareUrl || !!shared
+  if (!shared) return
+  const when = shared.when ? new Date(shared.when * 1000).toLocaleString('ja-JP', { dateStyle: 'medium', timeStyle: 'short' }) : ''
+  $('shared-title').textContent = `${shared.title}${when ? ` · ${when}` : ''}`
+  const sides = [shared.left, shared.right].map((side, index) => {
+    const box = document.createElement('div')
+    box.className = 'shared-side'
+    const head = document.createElement('h3')
+    const who = document.createElement('span')
+    who.className = 'who'
+    who.textContent = side ? `${index ? '2P' : '1P'}${side.label ? ` ${side.label}` : ''}` : '2P 空き部屋'
+    head.append(who, document.createTextNode(side?.fighter?.name ?? ''))
+    box.append(head)
+    if (side) {
+      box.append(productPart(side.barcode, side.secondBarcode ? '1枚目' : '', side.product))
+      if (side.secondBarcode) box.append(productPart(side.secondBarcode, '2枚目', side.secondProduct))
+    }
+    return box
+  })
+  $('shared-cards').replaceChildren(...sides)
+  // The result stays hidden until the replay, so the link does not spoil it.
+  $('shared-result').textContent = sharedReplayed
+    ? `結果: ${sharedWinner(shared)}の勝ち（${shared.rounds}手）`
+    : '結果は再生すると表示されます'
+  $<HTMLButtonElement>('shared-play').disabled = playing()
+}
 async function challengeCurrent() {
   const room = currentRoom()
   const fighter = challenger()
@@ -1616,7 +1790,8 @@ async function challengeCurrent() {
   try {
     await ensureSession()
     const championBefore = room.champion?.fighter ?? null
-    const result = await api<{ message: string; battle?: { log: string[]; winner: 'left' | 'right'; leftHp: number; rightHp: number } }>(
+    lastShareUrl = null
+    const result = await api<{ message: string; battle?: { id: string; log: string[]; winner: 'left' | 'right'; leftHp: number; rightHp: number } }>(
       `/api/rooms/${encodeURIComponent(room.id)}/challenge`, { barcode: heroCards.get('left'), secondBarcode: challengerSecond() })
     const lines = (result.battle?.log || []).map(fromChampionView)
     log(lines)
@@ -1632,6 +1807,10 @@ async function challengeCurrent() {
         champion: championBefore ? { ...championBefore, maxHp: championBefore.hp, hp: result.battle.leftHp } : null,
         winner: result.battle.winner === 'right' ? 'left' : 'right',
       }
+    }
+    if (result.battle?.id) {
+      lastShareUrl = `${location.origin}/battles/${result.battle.id}`
+      lastShareTitle = `勝ち抜き部屋「${room.name}」のバトル`
     }
     if (fxMode !== 'device') beep(roomFight?.winner === 'left' ? 1760 : 440, 0.35)
     status(`${translate(result.message)}${lines.length > 1 ? `（${lines.length - 1}手）` : ''}`)
@@ -1681,8 +1860,13 @@ document.querySelectorAll<HTMLButtonElement>('[data-setting]').forEach(button =>
     renderSettings()
   })
 })
+$('shared-close').addEventListener('click', closeShared)
+$('shared-play').addEventListener('click', () => { unlockAudio(); void replayShared() })
+$('shared-share').addEventListener('click', () => { if (shared) void shareLink(shared.url, shared.title, $('shared-note')) })
+$('share-battle').addEventListener('click', () => { if (lastShareUrl) void shareLink(lastShareUrl, lastShareTitle, $('share-note')) })
 // 勝ち抜き部屋 (VS) is the default mode.
 setOnline(true)
+void openPermalink()
 void api<Credits>('/api/config')
   .then(showCredits)
   .catch(() => {})
