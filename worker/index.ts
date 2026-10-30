@@ -1,10 +1,13 @@
 import { battle as simulateBattle, combineFighters, decodeBarcode, validateBarcode } from '../src/game.ts'
 import { amazonAffiliateEnabled, amazonApiEnabled, amazonSearchLinks, AMAZON_ASSOCIATE_TAG, searchAmazonProduct, type AmazonEnv } from './amazon.ts'
-import { isIsbn, LINKED_IMAGE_HOSTS, resolveOpenBD, resolveOpenFacts, resolveYahoo } from './products.ts'
+import { isIsbn, LINKED_IMAGE_HOSTS, resolveOpenBD, resolveOpenFacts, resolveRakuten, resolveYahoo } from './products.ts'
 
 interface Env extends AmazonEnv {
   /** Yahoo! JAPAN Client ID for 商品検索 v3; enables the Yahoo!ショッピング lookup and its credit. */
   YAHOO_APP_ID?: string
+  /** 楽天ウェブサービス application ID and access key; both enable the 楽天市場 lookup and its credit. */
+  RAKUTEN_APP_ID?: string
+  RAKUTEN_ACCESS_KEY?: string
   /** Bearer token for /api/admin/*; the admin API answers 404 while it is unset. */
   ADMIN_TOKEN?: string
   DB: D1Database
@@ -75,7 +78,7 @@ function headers(api = true): Headers {
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'same-origin',
     'Permissions-Policy': 'camera=(self), microphone=(), geolocation=()',
-    'Content-Security-Policy': `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://m.media-amazon.com https://images-fe.ssl-images-amazon.com https://images-jp.ssl-images-amazon.com https://images-na.ssl-images-amazon.com ${LINKED_IMAGE_HOSTS.yahoo.map(host => `https://${host}`).join(' ')} ${LINKED_IMAGE_HOSTS.openbd.map(host => `https://${host}`).join(' ')}; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`,
+    'Content-Security-Policy': `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://m.media-amazon.com https://images-fe.ssl-images-amazon.com https://images-jp.ssl-images-amazon.com https://images-na.ssl-images-amazon.com ${LINKED_IMAGE_HOSTS.yahoo.map(host => `https://${host}`).join(' ')} ${LINKED_IMAGE_HOSTS.rakuten.map(host => `https://${host}`).join(' ')} ${LINKED_IMAGE_HOSTS.openbd.map(host => `https://${host}`).join(' ')}; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`,
   })
   if (api) {
     result.set('Cache-Control', 'no-store')
@@ -335,6 +338,7 @@ async function lookupProduct(env: Env, code: string, force = false) {
     })
   }
   if (env.YAHOO_APP_ID) resolvers.push(() => resolveYahoo(env.YAHOO_APP_ID!, code, fetchJson))
+  if (rakutenEnabled(env)) resolvers.push(() => resolveRakuten(env.RAKUTEN_APP_ID!, env.RAKUTEN_ACCESS_KEY!, code, fetchJson))
   if (isIsbn(code)) resolvers.push(() => resolveOpenBD(code, fetchJson))
   resolvers.push(() => resolveOpenFacts(code, fetchJson))
 
@@ -377,6 +381,8 @@ async function lookupProduct(env: Env, code: string, force = false) {
   return productValue(row)
 }
 
+const rakutenEnabled = (env: Env) => !!(env.RAKUTEN_APP_ID && env.RAKUTEN_ACCESS_KEY)
+
 async function adminAuthorized(request: Request, env: Env): Promise<boolean> {
   const token = env.ADMIN_TOKEN
   const header = request.headers.get('Authorization') ?? ''
@@ -414,8 +420,8 @@ async function refreshProducts(request: Request, env: Env): Promise<Response> {
   const results: { barcode: string; name: string | null; thumbnail: boolean }[] = []
   for (const [index, { barcode: code }] of rows.results.entries()) {
     if (!validateBarcode(code)) continue
-    // Yahoo! allows about one query per second.
-    if (index > 0 && env.YAHOO_APP_ID) await new Promise(resolve => setTimeout(resolve, 1100))
+    // Yahoo! allows about one query per second; 楽天 also throttles bursts.
+    if (index > 0 && (env.YAHOO_APP_ID || rakutenEnabled(env))) await new Promise(resolve => setTimeout(resolve, 1100))
     let product: Awaited<ReturnType<typeof lookupProduct>> = null
     try { product = await lookupProduct(env, code, true) } catch { /* Counted as unresolved. */ }
     const found = !!(product?.name || product?.thumbnail)
@@ -531,7 +537,7 @@ async function api(request: Request, env: Env): Promise<Response> {
     return initializeSession(request, env)
   }
   if (request.method === 'GET' && path === '/api/config') {
-    return json({ amazonAffiliateEnabled: amazonAffiliateEnabled(), yahooCredit: !!env.YAHOO_APP_ID })
+    return json({ amazonAffiliateEnabled: amazonAffiliateEnabled(), yahooCredit: !!env.YAHOO_APP_ID, rakutenCredit: rakutenEnabled(env) })
   }
   if (request.method === 'GET' && path === '/api/rooms') {
     const owner = await session(request, env)
@@ -568,6 +574,7 @@ async function api(request: Request, env: Env): Promise<Response> {
       product: await lookupProduct(env, code),
       amazonAffiliateEnabled: amazonAffiliateEnabled(),
       yahooCredit: !!env.YAHOO_APP_ID,
+      rakutenCredit: rakutenEnabled(env),
     }, 200, extra)
   }
   const imageMatch = /^\/api\/images\/(\d+)$/.exec(path)

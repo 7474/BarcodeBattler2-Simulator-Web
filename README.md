@@ -169,15 +169,22 @@ GitHubリポジトリの **Settings → Secrets and variables → Actions** に
    JANコード検索（Client IDを`YAHOO_APP_ID`に設定した場合）。国内商品に強く、名前先頭の【送料無料】などの表記は除きます。
    画像はYahoo!の配信URLをそのまま表示し、保存しません。設定時はフッターに
    [規定のクレジット](https://developer.yahoo.co.jp/attribution/)「Webサービス by Yahoo! JAPAN」を表示します。
-3. [openBD](https://openbd.jp/)（ISBN 978/979）。書名と書影（ある場合）を、改変せずに購入リンクと並べて表示します。
+3. [楽天市場商品検索API](https://webservice.rakuten.co.jp/documentation/ichiba-item-search)
+   （アプリIDとアクセスキーを`RAKUTEN_APP_ID`・`RAKUTEN_ACCESS_KEY`に設定した場合）。JAN専用の検索条件がないため、
+   JANコードをキーワードにして先頭の1件を使います（商品説明にJANを載せている出品が多いため。まれに別商品が当たる可能性があります）。
+   画像は楽天の配信URLをそのまま表示し、保存しません。設定時はフッターに
+   [規定のクレジット](https://webservice.rakuten.co.jp/guide/credit)「Supported by Rakuten Developers」を表示します。
+4. [openBD](https://openbd.jp/)（ISBN 978/979）。書名と書影（ある場合）を、改変せずに購入リンクと並べて表示します。
    openBDのデータは[本の販促・紹介目的に限り利用できます](https://openbd.jp/terms/)。
-4. [Open Food Facts](https://world.openfoodfacts.org/)と姉妹DB（Open Beauty Facts、Open Products Facts、
+5. [Open Food Facts](https://world.openfoodfacts.org/)と姉妹DB（Open Beauty Facts、Open Products Facts、
    Open Pet Food Facts）。日本語名を優先し、なければ英語名・一般名・ブランド名を使います。画像は許可した配信元から取得し、
    サイズ・形式を制限してR2にキャッシュします。[データ利用条件](https://world.openfoodfacts.org/terms-of-use)
    （データベースODbL、個別コンテンツDbCL、画像CC BY-SA）に従ってください。
 
 ```sh
-npx wrangler secret put YAHOO_APP_ID   # 任意。Yahoo! JAPAN デベロッパーネットワークのClient ID
+npx wrangler secret put YAHOO_APP_ID         # 任意。Yahoo! JAPAN デベロッパーネットワークのClient ID
+npx wrangler secret put RAKUTEN_APP_ID       # 任意。楽天ウェブサービスのアプリID
+npx wrangler secret put RAKUTEN_ACCESS_KEY   # 任意。同じアプリのアクセスキー（両方そろったときに有効）
 ```
 
 ### 既存データの商品解決をやり直す
@@ -195,7 +202,7 @@ npx wrangler secret put ADMIN_TOKEN
   `scope: all` はキャッシュ済みの全商品をやり直します。
 - 管理API `POST /api/admin/products/refresh`（`Authorization: Bearer <ADMIN_TOKEN>`、
   本文 `{"scope":"missing","limit":5,"after":""}`）を、返る `next` を `after` に渡しながら `done` になるまで呼びます。
-  1回あたりの件数は1〜20件です（Workersのサブリクエスト上限とYahoo!の毎秒1件の目安を考慮）。
+  1回あたりの件数は1〜20件です（Workersのサブリクエスト上限と、Yahoo!・楽天への連続アクセスの抑制を考慮）。
 - `ADMIN_TOKEN` を設定していないあいだ、管理APIは404を返します。
 
 Amazon商品にはアフィリエイトリンクとアフィリエイトを含まない商品ページリンクを併記します。

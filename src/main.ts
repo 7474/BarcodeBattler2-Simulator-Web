@@ -212,7 +212,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </section>
   <footer><p>非公式ファンプロジェクト · 原作ゲーム・商標の権利は各権利者に帰属します</p><p id="amazon-disclosure" hidden>Amazonのアソシエイトとして、BarcodeBattler2-Simulator-Webは適格販売により収入を得ています。</p><p>商品データ: <a href="https://world.openfoodfacts.org/" target="_blank" rel="noreferrer">Open Food Facts</a>・<a href="https://world.openbeautyfacts.org/" target="_blank" rel="noreferrer">Open Beauty Facts</a>・<a href="https://world.openproductsfacts.org/" target="_blank" rel="noreferrer">Open Products Facts</a>・<a href="https://world.openpetfoodfacts.org/" target="_blank" rel="noreferrer">Open Pet Food Facts</a>（ODbL / 画像 CC BY-SA）</p><p>書誌・書影: <a href="https://openbd.jp/" target="_blank" rel="noreferrer">openBD</a></p><p id="yahoo-credit" hidden><!-- Begin Yahoo! JAPAN Web Services Attribution Snippet -->
 <span style="margin:15px 15px 15px 15px"><a href="https://developer.yahoo.co.jp/sitemap/">Webサービス by Yahoo! JAPAN</a></span>
-<!-- End Yahoo! JAPAN Web Services Attribution Snippet --></p></footer>`
+<!-- End Yahoo! JAPAN Web Services Attribution Snippet --></p><p id="rakuten-credit" hidden><!-- Rakuten Web Services Attribution Snippet FROM HERE -->
+<a href="https://developers.rakuten.com/" target="_blank">Supported by Rakuten Developers</a>
+<!-- Rakuten Web Services Attribution Snippet TO HERE --></p></footer>`
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const slots: { left: Fighter | null; right: Fighter | null } = { left: null, right: null }
@@ -349,6 +351,7 @@ function validProductThumbnail(value: string | null | undefined) {
       'images-jp.ssl-images-amazon.com',
       'images-na.ssl-images-amazon.com',
       ...LINKED_IMAGE_HOSTS.yahoo,
+      ...LINKED_IMAGE_HOSTS.rakuten,
       ...LINKED_IMAGE_HOSTS.openbd,
     ].includes(url.hostname)
   } catch {
@@ -767,6 +770,13 @@ function productPart(code: string, role: string, product: Product | null | undef
   part.append(text)
   return part
 }
+type Credits = { amazonAffiliateEnabled: boolean; yahooCredit?: boolean; rakutenCredit?: boolean }
+/** Disclosures and API credits required by the product sources in use. */
+function showCredits(credits: Credits) {
+  $('amazon-disclosure').hidden = !credits.amazonAffiliateEnabled
+  $('yahoo-credit').hidden = !credits.yahooCredit
+  $('rakuten-credit').hidden = !credits.rakutenCredit
+}
 /** The second card's own label (e.g. 武器（使い捨て）, 薬草アップ). */
 function secondName(side: Side, race: number) {
   const code = secondCards.get(side)
@@ -1002,9 +1012,8 @@ async function loadBarcode(barcode: string) {
     const lookup = (async () => {
       try {
         await ensureSession()
-        const result = await api<{ product: Product | null; amazonAffiliateEnabled: boolean; yahooCredit?: boolean }>(`/api/products/${fighter.barcode}`)
-        $('amazon-disclosure').hidden = !result.amazonAffiliateEnabled
-        $('yahoo-credit').hidden = !result.yahooCredit
+        const result = await api<{ product: Product | null; amazonAffiliateEnabled: boolean; yahooCredit?: boolean; rakutenCredit?: boolean }>(`/api/products/${fighter.barcode}`)
+        showCredits(result)
         if (result.product) products.set(fighter.barcode, result.product)
       } catch { /* Product lookup must not prevent local play. */ }
     })()
@@ -1513,8 +1522,8 @@ async function challengeCurrent() {
   status(`${room.name}に挑戦中…`)
   render()
   renderRoomList()
-  void api<{ amazonAffiliateEnabled: boolean; yahooCredit?: boolean }>('/api/config')
-    .then(config => { $('amazon-disclosure').hidden = !config.amazonAffiliateEnabled; $('yahoo-credit').hidden = !config.yahooCredit })
+  void api<Credits>('/api/config')
+    .then(showCredits)
     .catch(() => {})
   try {
     await ensureSession()
@@ -1586,6 +1595,6 @@ document.querySelectorAll<HTMLButtonElement>('[data-setting]').forEach(button =>
 })
 // 勝ち抜き部屋 (VS) is the default mode.
 setOnline(true)
-void api<{ amazonAffiliateEnabled: boolean; yahooCredit?: boolean }>('/api/config')
-  .then(config => { $('amazon-disclosure').hidden = !config.amazonAffiliateEnabled; $('yahoo-credit').hidden = !config.yahooCredit })
+void api<Credits>('/api/config')
+  .then(showCredits)
   .catch(() => {})

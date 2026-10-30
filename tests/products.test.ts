@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { cleanShopName, isIsbn, resolveOpenBD, resolveOpenFacts, resolveYahoo, safeImageUrl } from '../worker/products.ts'
+import { cleanShopName, isIsbn, resolveOpenBD, resolveOpenFacts, resolveRakuten, resolveYahoo, safeImageUrl } from '../worker/products.ts'
 
 const routes = (table: Record<string, unknown>) => {
   const calls: string[] = []
@@ -26,6 +26,26 @@ test('Yahoo!ショッピング: JAN search, shop tags stripped, only Yahoo image
   assert.match(calls[0], /jan_code=4901777018686/)
   assert.match(calls[0], /appid=app/)
   assert.equal(await resolveYahoo('app', '4901777018686', routes({ 'https://shopping.yahooapis.jp/': { hits: [] } }).fetchJson), null)
+})
+
+test('楽天市場: JAN as keyword, both image formats, only Rakuten image hosts', async () => {
+  const flat = routes({
+    'https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260701': {
+      items: [{ itemName: '【楽天限定】 伊右衛門 500ml×24本', mediumImageUrls: ['https://thumbnail.image.rakuten.co.jp/@0_mall/shop/cabinet/a.jpg?_ex=128x128'] }],
+    },
+  })
+  assert.deepEqual(await resolveRakuten('app', 'key', '4901777411760', flat.fetchJson), {
+    source: 'rakuten', name: '伊右衛門 500ml×24本', thumbnailUrl: 'https://thumbnail.image.rakuten.co.jp/@0_mall/shop/cabinet/a.jpg?_ex=128x128',
+  })
+  assert.match(flat.calls[0], /keyword=4901777411760/)
+  assert.match(flat.calls[0], /applicationId=app/)
+  assert.match(flat.calls[0], /accessKey=key/)
+  assert.match(flat.calls[0], /formatVersion=2/)
+  const nested = routes({
+    'https://openapi.rakuten.co.jp/': { items: [{ item: { itemName: 'お茶', mediumImageUrls: [{ imageUrl: 'https://evil.example/a.jpg' }], smallImageUrls: [{ imageUrl: 'https://thumbnail.image.rakuten.co.jp/b.jpg' }] } }] },
+  })
+  assert.deepEqual(await resolveRakuten('app', 'key', '4901777411760', nested.fetchJson), { source: 'rakuten', name: 'お茶', thumbnailUrl: 'https://thumbnail.image.rakuten.co.jp/b.jpg' })
+  assert.equal(await resolveRakuten('app', 'key', '4901777411760', routes({ 'https://openapi.rakuten.co.jp/': { items: [] } }).fetchJson), null)
 })
 
 test('openBD: ISBN only, title and cover', async () => {

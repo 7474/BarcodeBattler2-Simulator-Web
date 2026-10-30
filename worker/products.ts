@@ -5,11 +5,13 @@
  *
  * - Yahoo!ショッピング 商品検索 v3 (jan_code): https://developer.yahoo.co.jp/webapi/shopping/v3/itemsearch.html
  *   Needs a Client ID; credit display: https://developer.yahoo.co.jp/attribution/
+ * - 楽天市場商品検索 (keyword = JAN): https://webservice.rakuten.co.jp/documentation/ichiba-item-search
+ *   Needs an application ID and access key; credit: https://webservice.rakuten.co.jp/guide/credit
  * - openBD (ISBN): https://openbd.jp/ — data may be used only to introduce or
  *   promote books (https://openbd.jp/terms/); shown unmodified with buy links.
  * - Open Food Facts and its sister databases (ODbL, images CC BY-SA).
  */
-export type ProductSource = 'amazon' | 'yahoo' | 'openbd' | 'openfoodfacts' | 'openbeautyfacts' | 'openproductsfacts' | 'openpetfoodfacts'
+export type ProductSource = 'amazon' | 'yahoo' | 'rakuten' | 'openbd' | 'openfoodfacts' | 'openbeautyfacts' | 'openproductsfacts' | 'openpetfoodfacts'
 
 export interface ResolvedProduct {
   source: ProductSource
@@ -23,8 +25,9 @@ export interface ResolvedProduct {
 export type FetchJson = (url: string) => Promise<unknown>
 
 /** Hosts whose images are linked directly (they are not stored). */
-export const LINKED_IMAGE_HOSTS: Record<'yahoo' | 'openbd', readonly string[]> = {
+export const LINKED_IMAGE_HOSTS: Record<'yahoo' | 'rakuten' | 'openbd', readonly string[]> = {
   yahoo: ['item-shopping.c.yimg.jp'],
+  rakuten: ['thumbnail.image.rakuten.co.jp'],
   openbd: ['cover.openbd.jp'],
 }
 
@@ -73,6 +76,32 @@ export async function resolveYahoo(appId: string, code: string, fetchJson: Fetch
   const thumbnailUrl = safeImageUrl(hit.exImage?.url, LINKED_IMAGE_HOSTS.yahoo) ??
     safeImageUrl(hit.image?.medium, LINKED_IMAGE_HOSTS.yahoo) ?? safeImageUrl(hit.image?.small, LINKED_IMAGE_HOSTS.yahoo)
   return name || thumbnailUrl ? { source: 'yahoo', name, thumbnailUrl } : null
+}
+
+/**
+ * 楽天市場 has no JAN parameter, so the JAN is the keyword; listings usually
+ * carry it in their text. formatVersion=2 flattens items; image entries may be
+ * strings or { imageUrl } depending on the format version.
+ */
+export async function resolveRakuten(applicationId: string, accessKey: string, code: string, fetchJson: FetchJson): Promise<ResolvedProduct | null> {
+  const query = new URLSearchParams({
+    applicationId, accessKey, keyword: code, hits: '1', imageFlag: '1', formatVersion: '2',
+    elements: 'itemName,mediumImageUrls,smallImageUrls',
+  })
+  const data = await fetchJson(`https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260701?${query}`) as {
+    items?: ({ itemName?: unknown; mediumImageUrls?: unknown[]; smallImageUrls?: unknown[] } & { item?: { itemName?: unknown; mediumImageUrls?: unknown[]; smallImageUrls?: unknown[] } })[]
+  }
+  const raw = data?.items?.[0]
+  const item = raw?.item ?? raw
+  if (!item) return null
+  const image = (list: unknown[] | undefined) => {
+    const first = list?.[0] as unknown
+    const url = typeof first === 'string' ? first : (first as { imageUrl?: unknown } | undefined)?.imageUrl
+    return safeImageUrl(url, LINKED_IMAGE_HOSTS.rakuten)
+  }
+  const name = cleanShopName(item.itemName)
+  const thumbnailUrl = image(item.mediumImageUrls) ?? image(item.smallImageUrls)
+  return name || thumbnailUrl ? { source: 'rakuten', name, thumbnailUrl } : null
 }
 
 export const isIsbn = (code: string) => /^97[89]\d{10}$/.test(code)
