@@ -5,6 +5,8 @@ import { isIsbn, LINKED_IMAGE_HOSTS, resolveOpenBD, resolveOpenFacts, resolveYah
 interface Env extends AmazonEnv {
   /** Yahoo! JAPAN Client ID for 商品検索 v3; enables the Yahoo!ショッピング lookup and its credit. */
   YAHOO_APP_ID?: string
+  /** Bearer token for /api/admin/*; the admin API answers 404 while it is unset. */
+  ADMIN_TOKEN?: string
   DB: D1Database
   IMAGES: R2Bucket
   ASSETS: Fetcher
@@ -317,9 +319,9 @@ const MISSING_TTL = 6 * 3600
  * ISBNs, then Open Food / Beauty / Products / Pet Food Facts. Results, including
  * misses, are cached in D1; product data never decides a battle.
  */
-async function lookupProduct(env: Env, code: string) {
+async function lookupProduct(env: Env, code: string, force = false) {
   const cached = await env.DB.prepare('SELECT * FROM products WHERE barcode = ?').bind(code).first<ProductRow>()
-  if (cached) {
+  if (cached && !force) {
     const ttl = cached.source === 'amazon' ? AMAZON_TTL : cached.name || cached.has_thumbnail || cached.thumbnail_url ? FOUND_TTL : MISSING_TTL
     const amazonGone = cached.source === 'amazon' && !amazonApiEnabled(env)
     if (now() - cached.checked_at < ttl && !amazonGone) return productValue(cached)
@@ -373,6 +375,55 @@ async function lookupProduct(env: Env, code: string) {
     'checked_at = excluded.checked_at, source = excluded.source, asin = excluded.asin, thumbnail_url = excluded.thumbnail_url',
   ).bind(row.barcode, row.name, row.has_thumbnail, row.checked_at, row.source, row.asin, row.thumbnail_url).run()
   return productValue(row)
+}
+
+async function adminAuthorized(request: Request, env: Env): Promise<boolean> {
+  const token = env.ADMIN_TOKEN
+  const header = request.headers.get('Authorization') ?? ''
+  if (!token || !header.startsWith('Bearer ')) return false
+  // Compare digests so the check takes the same time whatever the input.
+  const [given, expected] = await Promise.all([hash(header.slice(7)), hash(token)])
+  let diff = 0
+  for (let i = 0; i < expected.length; i++) diff |= given.charCodeAt(i) ^ expected.charCodeAt(i)
+  return diff === 0
+}
+
+/**
+ * Re-resolve cached products in small batches, ignoring the cache: rows
+ * without a name or image (scope "missing", default) or every row ("all"),
+ * plus champion cards that have no product row. Barcodes are visited in
+ * order after `after`, so unresolvable rows never stall the run; callers
+ * repeat with the returned `next` until `done`.
+ */
+async function refreshProducts(request: Request, env: Env): Promise<Response> {
+  if (!env.ADMIN_TOKEN) throw new HttpError(404, 'NOT_FOUND', 'API route not found.')
+  if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.')
+  if (!await adminAuthorized(request, env)) throw new HttpError(401, 'UNAUTHORIZED', 'A valid admin token is required.')
+  const input = await body(request)
+  const scope = input.scope === 'all' ? 'all' : 'missing'
+  const limit = Math.max(1, Math.min(20, Number.isInteger(input.limit) ? input.limit as number : 5))
+  const after = typeof input.after === 'string' && /^\d{0,13}$/.test(input.after) ? input.after : ''
+  const rows = await env.DB.prepare(
+    'SELECT barcode FROM (' +
+    "SELECT barcode FROM products WHERE ?1 = 'all' OR (name IS NULL AND has_thumbnail = 0 AND thumbnail_url IS NULL) " +
+    'UNION SELECT champion_barcode FROM rooms WHERE champion_barcode IS NOT NULL AND champion_barcode NOT IN (SELECT barcode FROM products) ' +
+    'UNION SELECT champion_second_barcode FROM rooms WHERE champion_second_barcode IS NOT NULL AND champion_second_barcode NOT IN (SELECT barcode FROM products)' +
+    ') WHERE barcode > ?2 ORDER BY barcode LIMIT ?3',
+  ).bind(scope, after, limit).all<{ barcode: string }>()
+  let resolved = 0
+  const results: { barcode: string; name: string | null; thumbnail: boolean }[] = []
+  for (const [index, { barcode: code }] of rows.results.entries()) {
+    if (!validateBarcode(code)) continue
+    // Yahoo! allows about one query per second.
+    if (index > 0 && env.YAHOO_APP_ID) await new Promise(resolve => setTimeout(resolve, 1100))
+    let product: Awaited<ReturnType<typeof lookupProduct>> = null
+    try { product = await lookupProduct(env, code, true) } catch { /* Counted as unresolved. */ }
+    const found = !!(product?.name || product?.thumbnail)
+    if (found) resolved++
+    results.push({ barcode: code, name: product?.name ?? null, thumbnail: !!product?.thumbnail })
+  }
+  const last = rows.results.at(-1)?.barcode ?? null
+  return json({ scope, processed: rows.results.length, resolved, results, next: last, done: rows.results.length < limit })
 }
 
 async function challenge(request: Request, env: Env, roomId: string): Promise<Response> {
@@ -469,6 +520,9 @@ async function challenge(request: Request, env: Env, roomId: string): Promise<Re
 async function api(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url)
   const path = url.pathname
+  // Admin calls come from CI or a terminal, not the page, so they skip the
+  // same-origin check and use a bearer token instead.
+  if (path === '/api/admin/products/refresh') return refreshProducts(request, env)
   if (request.method === 'POST' && request.headers.get('Origin') !== url.origin) {
     throw new HttpError(403, 'INVALID_ORIGIN', 'A same-origin request is required.')
   }

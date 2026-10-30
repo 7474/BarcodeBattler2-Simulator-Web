@@ -180,6 +180,24 @@ GitHubリポジトリの **Settings → Secrets and variables → Actions** に
 npx wrangler secret put YAHOO_APP_ID   # 任意。Yahoo! JAPAN デベロッパーネットワークのClient ID
 ```
 
+### 既存データの商品解決をやり直す
+
+キャッシュ済みの商品（以前の不具合で名前・画像が空のまま保存された行など）は、GitHub Actionsの
+**Refresh products**（`.github/workflows/refresh-products.yml`）を手動実行すると解決し直せます。
+WorkerのSecret `ADMIN_TOKEN` と、リポジトリのSecret `ADMIN_TOKEN` に同じ値を設定してください。
+
+```sh
+openssl rand -hex 32                     # 生成した値を両方に設定
+npx wrangler secret put ADMIN_TOKEN
+```
+
+- `scope: missing`（既定）は、名前も画像もない行と、商品データのない王者のカード（2枚目を含む）が対象です。
+  `scope: all` はキャッシュ済みの全商品をやり直します。
+- 管理API `POST /api/admin/products/refresh`（`Authorization: Bearer <ADMIN_TOKEN>`、
+  本文 `{"scope":"missing","limit":5,"after":""}`）を、返る `next` を `after` に渡しながら `done` になるまで呼びます。
+  1回あたりの件数は1〜20件です（Workersのサブリクエスト上限とYahoo!の毎秒1件の目安を考慮）。
+- `ADMIN_TOKEN` を設定していないあいだ、管理APIは404を返します。
+
 Amazon商品にはアフィリエイトリンクとアフィリエイトを含まない商品ページリンクを併記します。
 商品を特定できない場合は、バーコード（JAN/EAN/ISBN）でのAmazon検索リンクを併記します。
 外部サービスへの照会にバーコード番号を使用します。カメラ映像は使用しません。
