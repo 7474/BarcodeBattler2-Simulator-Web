@@ -1,13 +1,17 @@
 import { battle as simulateBattle, combineFighters, decodeBarcode, validateBarcode } from '../src/game.ts'
 import { amazonAffiliateEnabled, amazonApiEnabled, amazonSearchLinks, AMAZON_ASSOCIATE_TAG, searchAmazonProduct, type AmazonEnv } from './amazon.ts'
-import { isIsbn, LINKED_IMAGE_HOSTS, resolveOpenBD, resolveOpenFacts, resolveRakuten, resolveYahoo } from './products.ts'
+import { isIsbn, itemLink, LINKED_IMAGE_HOSTS, resolveOpenBD, resolveOpenFacts, resolveRakuten, resolveYahoo } from './products.ts'
 
 interface Env extends AmazonEnv {
   /** Yahoo! JAPAN Client ID for 商品検索 v3; enables the Yahoo!ショッピング lookup and its credit. */
   YAHOO_APP_ID?: string
+  /** Optional ValueCommerce affiliate ID for Yahoo!ショッピング item links. */
+  YAHOO_AFFILIATE_ID?: string
   /** 楽天ウェブサービス application ID and access key; both enable the 楽天市場 lookup and its credit. */
   RAKUTEN_APP_ID?: string
   RAKUTEN_ACCESS_KEY?: string
+  /** Optional 楽天アフィリエイト ID for 楽天市場 item links. */
+  RAKUTEN_AFFILIATE_ID?: string
   /** Bearer token for /api/admin/*; the admin API answers 404 while it is unset. */
   ADMIN_TOKEN?: string
   DB: D1Database
@@ -42,6 +46,8 @@ interface Room {
   champion_second_source?: string | null
   champion_second_asin?: string | null
   champion_second_thumbnail_url?: string | null
+  champion_item_url?: string | null
+  champion_second_item_url?: string | null
 }
 
 interface ProductRow {
@@ -52,6 +58,7 @@ interface ProductRow {
   source: string
   asin: string | null
   thumbnail_url: string | null
+  item_url?: string | null
 }
 
 class HttpError extends Error {
@@ -68,7 +75,8 @@ const ROOM_SELECT = 'SELECT rooms.*, products.name AS champion_product_name, ' +
   'products.asin AS champion_product_asin, products.thumbnail_url AS champion_thumbnail_url, ' +
   'second.name AS champion_second_name, second.has_thumbnail AS champion_second_has_thumbnail, ' +
   'second.source AS champion_second_source, second.asin AS champion_second_asin, ' +
-  'second.thumbnail_url AS champion_second_thumbnail_url FROM rooms ' +
+  'second.thumbnail_url AS champion_second_thumbnail_url, products.item_url AS champion_item_url, ' +
+  'second.item_url AS champion_second_item_url FROM rooms ' +
   'LEFT JOIN products ON products.barcode = rooms.champion_barcode ' +
   'LEFT JOIN products AS second ON second.barcode = rooms.champion_second_barcode'
 
@@ -239,6 +247,7 @@ function publicRoom(room: Room, owner: string | null, env: Env) {
         source: room.champion_product_source ?? 'openfoodfacts',
         asin: room.champion_product_asin ?? null,
         thumbnail_url: room.champion_thumbnail_url ?? null,
+        item_url: room.champion_item_url ?? null,
       }),
       secondProduct: room.champion_second_barcode ? productValue({
         barcode: room.champion_second_barcode,
@@ -248,6 +257,7 @@ function publicRoom(room: Room, owner: string | null, env: Env) {
         source: room.champion_second_source ?? 'none',
         asin: room.champion_second_asin ?? null,
         thumbnail_url: room.champion_second_thumbnail_url ?? null,
+        item_url: room.champion_second_item_url ?? null,
       }) : null,
     } : null,
     updatedAt: room.updated_at,
@@ -264,6 +274,7 @@ function productValue(row: ProductRow | null, code = row?.barcode) {
   if (!code) return null
   const amazon = row?.source === 'amazon' && row.asin
   const thumbnail = row?.thumbnail_url ?? (row?.has_thumbnail ? `/api/images/${code}` : null)
+  const item = itemLink(row?.item_url)
   const searchLinks = amazonSearchLinks(code)
   return {
     name: row?.name ?? null,
@@ -274,6 +285,7 @@ function productValue(row: ProductRow | null, code = row?.barcode) {
       ? `https://www.amazon.co.jp/dp/${row!.asin}?tag=${encodeURIComponent(AMAZON_ASSOCIATE_TAG)}`
       : searchLinks.affiliateUrl,
     amazonStandardUrl: amazon ? `https://www.amazon.co.jp/dp/${row!.asin}` : searchLinks.standardUrl,
+    itemUrl: item?.url ?? null,
   }
 }
 
@@ -329,7 +341,7 @@ async function lookupProduct(env: Env, code: string, force = false) {
     const amazonGone = cached.source === 'amazon' && !amazonApiEnabled(env)
     if (now() - cached.checked_at < ttl && !amazonGone) return productValue(cached)
   }
-  type Found = { source: string; name: string | null; asin?: string | null; thumbnailUrl?: string | null; cacheImageUrl?: string | null }
+  type Found = { source: string; name: string | null; asin?: string | null; thumbnailUrl?: string | null; cacheImageUrl?: string | null; itemUrl?: string | null }
   const resolvers: (() => Promise<Found | null>)[] = []
   if (amazonApiEnabled(env)) {
     resolvers.push(async () => {
@@ -337,8 +349,8 @@ async function lookupProduct(env: Env, code: string, force = false) {
       return amazon ? { source: 'amazon', name: amazon.name, asin: amazon.asin, thumbnailUrl: amazon.thumbnail } : null
     })
   }
-  if (env.YAHOO_APP_ID) resolvers.push(() => resolveYahoo(env.YAHOO_APP_ID!, code, fetchJson))
-  if (rakutenEnabled(env)) resolvers.push(() => resolveRakuten(env.RAKUTEN_APP_ID!, env.RAKUTEN_ACCESS_KEY!, code, fetchJson))
+  if (env.YAHOO_APP_ID) resolvers.push(() => resolveYahoo(env.YAHOO_APP_ID!, code, fetchJson, env.YAHOO_AFFILIATE_ID))
+  if (rakutenEnabled(env)) resolvers.push(() => resolveRakuten(env.RAKUTEN_APP_ID!, env.RAKUTEN_ACCESS_KEY!, code, fetchJson, env.RAKUTEN_AFFILIATE_ID))
   if (isIsbn(code)) resolvers.push(() => resolveOpenBD(code, fetchJson))
   resolvers.push(() => resolveOpenFacts(code, fetchJson))
 
@@ -349,11 +361,14 @@ async function lookupProduct(env: Env, code: string, force = false) {
     try { next = await resolve() } catch { next = null }
     if (!next) continue
     if (!found) found = next
-    else if (!found.thumbnailUrl && !found.cacheImageUrl) found = { ...found, thumbnailUrl: next.thumbnailUrl, cacheImageUrl: next.cacheImageUrl }
+    // An image keeps the link to the platform it came from.
+    else if (!found.thumbnailUrl && !found.cacheImageUrl) {
+      found = { ...found, thumbnailUrl: next.thumbnailUrl, cacheImageUrl: next.cacheImageUrl, itemUrl: next.thumbnailUrl || next.cacheImageUrl ? next.itemUrl : found.itemUrl }
+    }
     if (found.name && (found.thumbnailUrl || found.cacheImageUrl)) break
     if (!found.name && next.name) {
       const image = next.thumbnailUrl || next.cacheImageUrl ? next : found
-      found = { ...next, thumbnailUrl: image.thumbnailUrl, cacheImageUrl: image.cacheImageUrl }
+      found = { ...next, thumbnailUrl: image.thumbnailUrl, cacheImageUrl: image.cacheImageUrl, itemUrl: image.itemUrl ?? next.itemUrl }
     }
   }
   let hasThumbnail = 0
@@ -372,16 +387,22 @@ async function lookupProduct(env: Env, code: string, force = false) {
   const row: ProductRow = {
     barcode: code, name: found?.name ?? null, has_thumbnail: hasThumbnail, checked_at: now(),
     source: found?.source ?? 'none', asin: found?.asin ?? null, thumbnail_url: found?.thumbnailUrl ?? null,
+    item_url: found?.itemUrl ?? null,
   }
   await env.DB.prepare(
-    'INSERT INTO products (barcode, name, has_thumbnail, checked_at, source, asin, thumbnail_url) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
+    'INSERT INTO products (barcode, name, has_thumbnail, checked_at, source, asin, thumbnail_url, item_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ' +
     'ON CONFLICT(barcode) DO UPDATE SET name = excluded.name, has_thumbnail = excluded.has_thumbnail, ' +
-    'checked_at = excluded.checked_at, source = excluded.source, asin = excluded.asin, thumbnail_url = excluded.thumbnail_url',
-  ).bind(row.barcode, row.name, row.has_thumbnail, row.checked_at, row.source, row.asin, row.thumbnail_url).run()
+    'checked_at = excluded.checked_at, source = excluded.source, asin = excluded.asin, thumbnail_url = excluded.thumbnail_url, item_url = excluded.item_url',
+  ).bind(row.barcode, row.name, row.has_thumbnail, row.checked_at, row.source, row.asin, row.thumbnail_url, row.item_url).run()
   return productValue(row)
 }
 
 const rakutenEnabled = (env: Env) => !!(env.RAKUTEN_APP_ID && env.RAKUTEN_ACCESS_KEY)
+/** Affiliate programmes behind Yahoo! / 楽天 item links, for the footer disclosure. */
+const shopAffiliates = (env: Env) => [
+  ...(env.YAHOO_APP_ID && env.YAHOO_AFFILIATE_ID ? ['バリューコマース（Yahoo!ショッピング）'] : []),
+  ...(rakutenEnabled(env) && env.RAKUTEN_AFFILIATE_ID ? ['楽天アフィリエイト'] : []),
+]
 
 async function adminAuthorized(request: Request, env: Env): Promise<boolean> {
   const token = env.ADMIN_TOKEN
@@ -412,6 +433,8 @@ async function refreshProducts(request: Request, env: Env): Promise<Response> {
   const rows = await env.DB.prepare(
     'SELECT barcode FROM (' +
     "SELECT barcode FROM products WHERE ?1 = 'all' OR (name IS NULL AND has_thumbnail = 0 AND thumbnail_url IS NULL) " +
+    // Rows cached before item links existed.
+    "OR (item_url IS NULL AND source IN ('yahoo', 'rakuten', 'openfoodfacts', 'openbeautyfacts', 'openproductsfacts', 'openpetfoodfacts')) " +
     'UNION SELECT champion_barcode FROM rooms WHERE champion_barcode IS NOT NULL AND champion_barcode NOT IN (SELECT barcode FROM products) ' +
     'UNION SELECT champion_second_barcode FROM rooms WHERE champion_second_barcode IS NOT NULL AND champion_second_barcode NOT IN (SELECT barcode FROM products)' +
     ') WHERE barcode > ?2 ORDER BY barcode LIMIT ?3',
@@ -514,6 +537,7 @@ async function challenge(request: Request, env: Env, roomId: string): Promise<Re
     champion_product_source: challengerWon ? (product?.amazonAsin ? 'amazon' : 'other') : room.champion_product_source,
     champion_product_asin: challengerWon ? product?.amazonAsin ?? null : room.champion_product_asin,
     champion_thumbnail_url: challengerWon ? product?.thumbnail ?? null : room.champion_thumbnail_url,
+    champion_item_url: challengerWon ? product?.itemUrl ?? null : room.champion_item_url,
   }
   const publicResult = publicRoom(updated, owner, env)
   const message = !room.champion_barcode ? 'You are the first champion of this room.'
@@ -537,7 +561,7 @@ async function api(request: Request, env: Env): Promise<Response> {
     return initializeSession(request, env)
   }
   if (request.method === 'GET' && path === '/api/config') {
-    return json({ amazonAffiliateEnabled: amazonAffiliateEnabled(), yahooCredit: !!env.YAHOO_APP_ID, rakutenCredit: rakutenEnabled(env) })
+    return json({ amazonAffiliateEnabled: amazonAffiliateEnabled(), yahooCredit: !!env.YAHOO_APP_ID, rakutenCredit: rakutenEnabled(env), shopAffiliates: shopAffiliates(env) })
   }
   if (request.method === 'GET' && path === '/api/rooms') {
     const owner = await session(request, env)
@@ -575,6 +599,7 @@ async function api(request: Request, env: Env): Promise<Response> {
       amazonAffiliateEnabled: amazonAffiliateEnabled(),
       yahooCredit: !!env.YAHOO_APP_ID,
       rakutenCredit: rakutenEnabled(env),
+      shopAffiliates: shopAffiliates(env),
     }, 200, extra)
   }
   const imageMatch = /^\/api\/images\/(\d+)$/.exec(path)
