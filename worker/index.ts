@@ -1,7 +1,10 @@
 import { battle as simulateBattle, combineFighters, decodeBarcode, validateBarcode } from '../src/game.ts'
 import { amazonAffiliateEnabled, amazonApiEnabled, amazonSearchLinks, AMAZON_ASSOCIATE_TAG, searchAmazonProduct, type AmazonEnv } from './amazon.ts'
+import { isIsbn, LINKED_IMAGE_HOSTS, resolveOpenBD, resolveOpenFacts, resolveYahoo } from './products.ts'
 
 interface Env extends AmazonEnv {
+  /** Yahoo! JAPAN Client ID for 商品検索 v3; enables the Yahoo!ショッピング lookup and its credit. */
+  YAHOO_APP_ID?: string
   DB: D1Database
   IMAGES: R2Bucket
   ASSETS: Fetcher
@@ -61,7 +64,7 @@ function headers(api = true): Headers {
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'same-origin',
     'Permissions-Policy': 'camera=(self), microphone=(), geolocation=()',
-    'Content-Security-Policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://m.media-amazon.com https://images-fe.ssl-images-amazon.com https://images-jp.ssl-images-amazon.com https://images-na.ssl-images-amazon.com; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    'Content-Security-Policy': `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://m.media-amazon.com https://images-fe.ssl-images-amazon.com https://images-jp.ssl-images-amazon.com https://images-na.ssl-images-amazon.com ${LINKED_IMAGE_HOSTS.yahoo.map(host => `https://${host}`).join(' ')} ${LINKED_IMAGE_HOSTS.openbd.map(host => `https://${host}`).join(' ')}; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`,
   })
   if (api) {
     result.set('Cache-Control', 'no-store')
@@ -237,8 +240,7 @@ async function getRoom(env: Env, id: string): Promise<Room> {
 function productValue(row: ProductRow | null, code = row?.barcode) {
   if (!code) return null
   const amazon = row?.source === 'amazon' && row.asin
-  const thumbnail = row?.source === 'amazon' ? row.thumbnail_url :
-    row?.has_thumbnail ? `/api/images/${code}` : null
+  const thumbnail = row?.thumbnail_url ?? (row?.has_thumbnail ? `/api/images/${code}` : null)
   const searchLinks = amazonSearchLinks(code)
   return {
     name: row?.name ?? null,
@@ -257,7 +259,8 @@ async function fetchBytes(url: string, max: number): Promise<{ bytes: Uint8Array
   const timer = setTimeout(() => controller.abort(), 3500)
   try {
     const response = await fetch(url, {
-      redirect: 'error',
+      // Workers reject redirect: 'error'; take 3xx as unavailable instead.
+      redirect: 'manual',
       signal: controller.signal,
       headers: { 'User-Agent': 'BarcodeBattlerWeb/1.0 (product metadata cache)' },
     })
@@ -279,85 +282,79 @@ function imageType(bytes: Uint8Array): string | null {
   return null
 }
 
+/** Upstream fetch of a small JSON document (redirects are not followed). */
+async function fetchJson(url: string): Promise<unknown> {
+  const { bytes, type } = await fetchBytes(url, 256 * 1024)
+  if (!type.toLowerCase().includes('json')) throw new Error('Unexpected metadata type.')
+  return JSON.parse(new TextDecoder().decode(bytes))
+}
+
+const FOUND_TTL = 7 * 86400
+const AMAZON_TTL = 86400
+const MISSING_TTL = 6 * 3600
+
+/**
+ * Resolve a product name and thumbnail as hard as reasonable: Amazon (Creators
+ * API, when configured), Yahoo!ショッピング (when YAHOO_APP_ID is set), openBD for
+ * ISBNs, then Open Food / Beauty / Products / Pet Food Facts. Results, including
+ * misses, are cached in D1; product data never decides a battle.
+ */
 async function lookupProduct(env: Env, code: string) {
   const cached = await env.DB.prepare('SELECT * FROM products WHERE barcode = ?').bind(code).first<ProductRow>()
-  const timestamp = now()
-  const amazonEnabled = amazonApiEnabled(env)
-  const openFoodFactsCache = cached?.source === 'amazon' ? null : cached
-  if (cached && (cached.source !== 'amazon' || amazonEnabled) &&
-    timestamp - cached.checked_at < (cached.source === 'amazon' ? 86400 : cached.name ? 7 * 86400 : 3600)) {
-    if (!amazonEnabled || cached.source === 'amazon') return productValue(cached)
+  if (cached) {
+    const ttl = cached.source === 'amazon' ? AMAZON_TTL : cached.name || cached.has_thumbnail || cached.thumbnail_url ? FOUND_TTL : MISSING_TTL
+    const amazonGone = cached.source === 'amazon' && !amazonApiEnabled(env)
+    if (now() - cached.checked_at < ttl && !amazonGone) return productValue(cached)
   }
-  if (amazonEnabled) {
-    try {
+  type Found = { source: string; name: string | null; asin?: string | null; thumbnailUrl?: string | null; cacheImageUrl?: string | null }
+  const resolvers: (() => Promise<Found | null>)[] = []
+  if (amazonApiEnabled(env)) {
+    resolvers.push(async () => {
       const amazon = await searchAmazonProduct(env, code)
-      if (amazon) {
-        const product: ProductRow = {
-          barcode: code,
-          name: amazon.name,
-          has_thumbnail: amazon.thumbnail ? 1 : 0,
-          checked_at: now(),
-          source: 'amazon',
-          asin: amazon.asin,
-          thumbnail_url: amazon.thumbnail,
-        }
-        await env.DB.prepare(
-          'INSERT INTO products (barcode, name, has_thumbnail, checked_at, source, asin, thumbnail_url) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
-          'ON CONFLICT(barcode) DO UPDATE SET name = excluded.name, has_thumbnail = excluded.has_thumbnail, ' +
-          'checked_at = excluded.checked_at, source = excluded.source, asin = excluded.asin, thumbnail_url = excluded.thumbnail_url',
-        ).bind(code, product.name, product.has_thumbnail, product.checked_at, product.source, product.asin, product.thumbnail_url).run()
-        return productValue(product)
+      return amazon ? { source: 'amazon', name: amazon.name, asin: amazon.asin, thumbnailUrl: amazon.thumbnail } : null
+    })
+  }
+  if (env.YAHOO_APP_ID) resolvers.push(() => resolveYahoo(env.YAHOO_APP_ID!, code, fetchJson))
+  if (isIsbn(code)) resolvers.push(() => resolveOpenBD(code, fetchJson))
+  resolvers.push(() => resolveOpenFacts(code, fetchJson))
+
+  // The first source with a name wins; later sources may still supply a missing image.
+  let found = null as Found | null
+  for (const resolve of resolvers) {
+    let next: Found | null = null
+    try { next = await resolve() } catch { next = null }
+    if (!next) continue
+    if (!found) found = next
+    else if (!found.thumbnailUrl && !found.cacheImageUrl) found = { ...found, thumbnailUrl: next.thumbnailUrl, cacheImageUrl: next.cacheImageUrl }
+    if (found.name && (found.thumbnailUrl || found.cacheImageUrl)) break
+    if (!found.name && next.name) {
+      const image = next.thumbnailUrl || next.cacheImageUrl ? next : found
+      found = { ...next, thumbnailUrl: image.thumbnailUrl, cacheImageUrl: image.cacheImageUrl }
+    }
+  }
+  let hasThumbnail = 0
+  if (found?.cacheImageUrl) {
+    try {
+      const image = await fetchBytes(found.cacheImageUrl, 512 * 1024)
+      const contentType = imageType(image.bytes)
+      if (contentType) {
+        await env.IMAGES.put(`products/${code}`, image.bytes, { httpMetadata: { contentType } })
+        hasThumbnail = 1
       }
     } catch {
-      // Amazon failures fall through to the existing product source.
+      // Product names remain useful when the optional image is unavailable.
     }
   }
-  if (openFoodFactsCache && timestamp - openFoodFactsCache.checked_at <
-    (openFoodFactsCache.name ? 7 * 86400 : 3600)) return productValue(openFoodFactsCache)
-
-  let name = openFoodFactsCache?.name ?? null
-  let hasThumbnail = openFoodFactsCache?.has_thumbnail ?? 0
-  try {
-    const { bytes, type } = await fetchBytes(
-      `https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=product_name,product_name_en,image_small_url`, 128 * 1024,
-    )
-    if (!type.toLowerCase().includes('application/json')) throw new Error('Unexpected metadata type.')
-    const data = JSON.parse(new TextDecoder().decode(bytes)) as {
-      status?: number
-      product?: { product_name?: unknown; product_name_en?: unknown; image_small_url?: unknown }
-    }
-    if (data.status === 1 && data.product) {
-      const raw = data.product.product_name || data.product.product_name_en
-      if (typeof raw === 'string') name = raw.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 160) || null
-      if (!hasThumbnail && typeof data.product.image_small_url === 'string') {
-        try {
-          const url = new URL(data.product.image_small_url)
-          if (url.protocol === 'https:' && url.hostname === 'images.openfoodfacts.org' &&
-            !url.port && !url.username && !url.password) {
-            const image = await fetchBytes(url.href, 512 * 1024)
-            const contentType = imageType(image.bytes)
-            if (contentType) {
-              await env.IMAGES.put(`products/${code}`, image.bytes, { httpMetadata: { contentType } })
-              hasThumbnail = 1
-            }
-          }
-        } catch {
-          // Product names remain useful when the optional image is unavailable.
-        }
-      }
-    }
-  } catch {
-    // Cache upstream failures briefly; product availability never decides a battle.
+  const row: ProductRow = {
+    barcode: code, name: found?.name ?? null, has_thumbnail: hasThumbnail, checked_at: now(),
+    source: found?.source ?? 'none', asin: found?.asin ?? null, thumbnail_url: found?.thumbnailUrl ?? null,
   }
   await env.DB.prepare(
-    'INSERT INTO products (barcode, name, has_thumbnail, checked_at, source, asin, thumbnail_url) VALUES (?, ?, ?, ?, ?, NULL, NULL) ' +
+    'INSERT INTO products (barcode, name, has_thumbnail, checked_at, source, asin, thumbnail_url) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
     'ON CONFLICT(barcode) DO UPDATE SET name = excluded.name, has_thumbnail = excluded.has_thumbnail, ' +
-    'checked_at = excluded.checked_at, source = excluded.source, asin = NULL, thumbnail_url = NULL',
-  ).bind(code, name, hasThumbnail, now(), 'openfoodfacts').run()
-  return productValue({
-    barcode: code, name, has_thumbnail: hasThumbnail, checked_at: now(),
-    source: 'openfoodfacts', asin: null, thumbnail_url: null,
-  })
+    'checked_at = excluded.checked_at, source = excluded.source, asin = excluded.asin, thumbnail_url = excluded.thumbnail_url',
+  ).bind(row.barcode, row.name, row.has_thumbnail, row.checked_at, row.source, row.asin, row.thumbnail_url).run()
+  return productValue(row)
 }
 
 async function challenge(request: Request, env: Env, roomId: string): Promise<Response> {
@@ -437,9 +434,9 @@ async function challenge(request: Request, env: Env, roomId: string): Promise<Re
     champion_owner_hash: winnerOwner, champion_wins: wins, last_battle_id: id, updated_at: timestamp,
     champion_product_name: challengerWon ? product?.name ?? null : room.champion_product_name,
     champion_has_thumbnail: challengerWon ? (product?.thumbnail ? 1 : 0) : room.champion_has_thumbnail,
-    champion_product_source: challengerWon ? (product?.amazonAsin ? 'amazon' : 'openfoodfacts') : room.champion_product_source,
+    champion_product_source: challengerWon ? (product?.amazonAsin ? 'amazon' : 'other') : room.champion_product_source,
     champion_product_asin: challengerWon ? product?.amazonAsin ?? null : room.champion_product_asin,
-    champion_thumbnail_url: challengerWon && product?.amazonAffiliateUrl ? product.thumbnail : null,
+    champion_thumbnail_url: challengerWon ? product?.thumbnail ?? null : room.champion_thumbnail_url,
   }
   const publicResult = publicRoom(updated, owner, env)
   const message = !room.champion_barcode ? 'You are the first champion of this room.'
@@ -460,7 +457,7 @@ async function api(request: Request, env: Env): Promise<Response> {
     return initializeSession(request, env)
   }
   if (request.method === 'GET' && path === '/api/config') {
-    return json({ amazonAffiliateEnabled: amazonAffiliateEnabled() })
+    return json({ amazonAffiliateEnabled: amazonAffiliateEnabled(), yahooCredit: !!env.YAHOO_APP_ID })
   }
   if (request.method === 'GET' && path === '/api/rooms') {
     const owner = await session(request, env)
@@ -496,6 +493,7 @@ async function api(request: Request, env: Env): Promise<Response> {
     return json({
       product: await lookupProduct(env, code),
       amazonAffiliateEnabled: amazonAffiliateEnabled(),
+      yahooCredit: !!env.YAHOO_APP_ID,
     }, 200, extra)
   }
   const imageMatch = /^\/api\/images\/(\d+)$/.exec(path)
