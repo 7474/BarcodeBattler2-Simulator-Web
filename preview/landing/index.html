@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>BB2 Web 旧リビジョン</title>
+    <style>
+      body { margin: 0 auto; padding: 24px 16px; max-width: 640px; font-family: system-ui, sans-serif; line-height: 1.6; color: #222; background: #fff; }
+      li { margin: 8px 0; }
+    </style>
+  </head>
+  <body>
+    <h1>バーコードバトラーII Web 旧リビジョン</h1>
+    <p>見た目の確認用です。サーバー（勝ち抜き部屋・商品検索）にはつながっていないため、ローカル対戦の画面だけ動きます。</p>
+    <ul>
+      <li><a data-alias="copilot" href="#">Copilot 版</a>（PR #4 マージ時点、5bf7dbd）</li>
+      <li><a data-alias="cursor" href="#">Cursor 版</a>（PR #7 マージ時点、2070c34）</li>
+      <li><a href="https://bb2.koudenpa.net/">現行版（本番）</a></li>
+    </ul>
+    <script>
+      // Aliased Version URLs are <alias>-<worker>.<subdomain>.workers.dev.
+      for (const link of document.querySelectorAll('a[data-alias]')) {
+        link.href = `${location.protocol}//${link.dataset.alias}-${location.host}/`
+      }
+    </script>
+  </body>
+</html>

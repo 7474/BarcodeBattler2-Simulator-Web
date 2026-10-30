@@ -1,0 +1,16 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  // Assets-only Worker for looking at earlier UI revisions (Copilot / Cursor).
+  // It has no D1/R2 bindings on purpose: Version URLs run with the uploaded
+  // version's own bindings, so old code must not reach production data.
+  // The legacy builds are uploaded as versions with aliases by
+  // .github/workflows/preview-legacy.yml; this landing page only links to them.
+  "name": "barcode-battler-web-preview",
+  "compatibility_date": "2026-10-23",
+  "workers_dev": true,
+  "preview_urls": true,
+  "assets": {
+    "directory": "./landing",
+    "not_found_handling": "single-page-application"
+  }
+}
