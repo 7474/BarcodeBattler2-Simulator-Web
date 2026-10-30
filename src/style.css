@@ -495,3 +495,17 @@ footer a { color: var(--accent); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Permalinks ---------- */
+.shared { margin: 0 -14px; padding: 14px; background: rgba(63, 79, 168, .06); border-bottom: 1px solid var(--panel-line); }
+.shared-title { margin: 0 0 10px; font-weight: 800; }
+.shared-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.shared-side { min-width: 0; padding: 10px 12px; border-radius: 12px; background: #fff; border: 1px solid var(--panel-line); }
+.shared-side h3 { margin: 0 0 6px; font-size: .9rem; overflow-wrap: anywhere; }
+.shared-result { margin: 0 0 10px; font-weight: 800; color: var(--accent); }
+.shared .field-row button { flex: 1; }
+.share-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.share-row button { flex: 1; }
+.share-note { flex-basis: 100%; margin: 4px 0 0; font-size: .78rem; color: var(--page-muted); overflow-wrap: anywhere; }
+.share-note:empty { display: none; }
+@media (max-width: 560px) { .shared-cards { grid-template-columns: 1fr; } }

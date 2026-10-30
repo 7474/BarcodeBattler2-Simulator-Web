@@ -520,7 +520,10 @@ async function challenge(request: Request, env: Env, roomId: string): Promise<Re
       'INSERT INTO battles (id, room_id, room_revision, challenger_barcode, challenger_second_barcode, defender_barcode, defender_second_barcode, ' +
       'challenger_owner_hash, winner_barcode, result, created_at) ' +
       'SELECT ?, id, revision, ?, ?, ?, ?, ?, ?, ?, ? FROM rooms WHERE id = ? AND last_battle_id = ?',
-    ).bind(id, code, secondCode, room.champion_barcode, room.champion_second_barcode, owner, winnerBarcode, JSON.stringify(battle), timestamp, roomId, id),
+    ).bind(id, code, secondCode, room.champion_barcode, room.champion_second_barcode, owner, winnerBarcode,
+      // Keep both fighters as they fought, so a permalink replays the exact stats.
+      JSON.stringify({ ...battle, fighters: { defender: room.champion_fighter ? JSON.parse(room.champion_fighter) : null, challenger: fighter } }),
+      timestamp, roomId, id),
   ])
   if (results[0]!.meta.changes !== 1 || results[1]!.meta.changes !== 1) {
     throw new HttpError(409, 'CHAMPION_CHANGED', 'The champion changed. Refresh the room and try again.')
@@ -545,6 +548,91 @@ async function challenge(request: Request, env: Env, roomId: string): Promise<Re
   return json({ message, battle: { ...battle, id, roomId, challengerBarcode: code, challengerSecondBarcode: secondCode,
     defenderBarcode: room.champion_barcode, defenderSecondBarcode: room.champion_second_barcode, winnerBarcode, createdAt: timestamp },
     room: publicResult, champion: publicResult.champion, product })
+}
+
+const BATTLE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/** Fighter as it entered the battle; older rows did not store it, so rebuild it from the barcodes. */
+function recordedFighter(stored: unknown, code: string | null, second: string | null) {
+  if (stored && typeof stored === 'object') return stored as ReturnType<typeof decodeBarcode>
+  if (!code) return null
+  try {
+    const base = decodeBarcode(code, { rng: () => 0.5 })
+    return second ? combineFighters(base, decodeBarcode(second, { rng: () => 0.5 }), { mode: 'C0' }) : base
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Public view of one room battle for permalinks (/battles/<id>). The Worker
+ * simulates with the champion on the left; this keeps that orientation and
+ * labels the sides. Session hashes are never returned.
+ */
+async function battleRecord(env: Env, id: string) {
+  if (!BATTLE_ID.test(id)) return null
+  const row = await env.DB.prepare(
+    'SELECT battles.*, rooms.name AS room_name FROM battles JOIN rooms ON rooms.id = battles.room_id WHERE battles.id = ?',
+  ).bind(id).first<{
+    id: string; room_id: string; room_name: string; challenger_barcode: string; challenger_second_barcode: string | null
+    defender_barcode: string | null; defender_second_barcode: string | null; winner_barcode: string; result: string; created_at: number
+  }>()
+  if (!row) return null
+  const result = JSON.parse(row.result) as {
+    winner: 'left' | 'right'; rounds: number; log: string[]; leftHp: number; rightHp: number
+    fighters?: { defender: unknown; challenger: unknown }
+  }
+  const codes = [row.challenger_barcode, row.challenger_second_barcode, row.defender_barcode, row.defender_second_barcode]
+    .filter((code): code is string => !!code)
+  const products = new Map<string, ProductRow>()
+  if (codes.length) {
+    const rows = await env.DB.prepare(`SELECT * FROM products WHERE barcode IN (${codes.map(() => '?').join(', ')})`)
+      .bind(...codes).all<ProductRow>()
+    for (const product of rows.results) products.set(product.barcode, product)
+  }
+  const side = (code: string | null, second: string | null, stored: unknown) => code ? {
+    barcode: code, secondBarcode: second,
+    fighter: recordedFighter(stored, code, second),
+    product: productValue(products.get(code) ?? null, code),
+    secondProduct: second ? productValue(products.get(second) ?? null, second) : null,
+  } : null
+  return {
+    id: row.id, room: { id: row.room_id, name: row.room_name }, createdAt: row.created_at,
+    rounds: result.rounds, log: result.log, leftHp: result.leftHp, rightHp: result.rightHp,
+    winner: result.winner === 'right' ? 'challenger' as const : 'defender' as const,
+    challenger: side(row.challenger_barcode, row.challenger_second_barcode, result.fighters?.challenger),
+    defender: side(row.defender_barcode, row.defender_second_barcode, result.fighters?.defender),
+  }
+}
+
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
+
+/** /battles/<id>: the app page with a title and Open Graph tags describing the battle. */
+async function battlePage(request: Request, env: Env, id: string): Promise<Response> {
+  const asset = await env.ASSETS.fetch(new Request(new URL('/', request.url), request))
+  const record = await battleRecord(env, id).catch(() => null)
+  const page = new Response(asset.body, asset)
+  headers(false).forEach((value, key) => page.headers.set(key, value))
+  if (!record) return page
+  const label = (side: NonNullable<typeof record.challenger> | null) =>
+    side ? side.product?.name ?? side.fighter?.name ?? side.barcode : '空き部屋'
+  const winner = record.winner === 'challenger' ? '挑戦者の勝ち' : '王者の防衛'
+  const title = `${label(record.challenger)} vs ${label(record.defender)} — ${winner}`
+  const description = `${record.room.name} / ${record.rounds}手 / バーコードバトラーII Web の勝ち抜き部屋のバトル`
+  const meta = (property: string, content: string) => `<meta property="${property}" content="${escapeHtml(content)}">`
+  page.headers.set('Cache-Control', 'public, max-age=300')
+  return new HTMLRewriter()
+    .on('title', { element(element) { element.setInnerContent(`${title} | バーコードバトラーII Web`) } })
+    .on('head', {
+      element(element) {
+        element.append([
+          meta('og:type', 'website'), meta('og:title', title), meta('og:description', description),
+          meta('og:url', new URL(`/battles/${record.id}`, request.url).href), meta('og:site_name', 'バーコードバトラーII Web'),
+          `<meta name="twitter:card" content="summary">`,
+        ].join(''), { html: true })
+      },
+    })
+    .transform(page)
 }
 
 async function api(request: Request, env: Env): Promise<Response> {
@@ -579,6 +667,14 @@ async function api(request: Request, env: Env): Promise<Response> {
       ...JSON.parse(row.result), id: row.id, challengerBarcode: row.challenger_barcode,
       defenderBarcode: row.defender_barcode, winnerBarcode: row.winner_barcode, createdAt: row.created_at,
     })) })
+  }
+  const battleMatch = /^\/api\/battles\/([0-9a-f-]+)$/.exec(path)
+  if (request.method === 'GET' && battleMatch) {
+    const record = await battleRecord(env, battleMatch[1]!)
+    if (!record) throw new HttpError(404, 'BATTLE_NOT_FOUND', 'Battle not found.')
+    const response = json(record)
+    response.headers.set('Cache-Control', 'public, max-age=300')
+    return response
   }
   const challengeMatch = /^\/api\/rooms\/([a-z0-9_-]+)\/challenge$/.exec(path)
   if (request.method === 'POST' && challengeMatch) return challenge(request, env, challengeMatch[1]!)
@@ -626,6 +722,8 @@ export default {
     try {
       const url = new URL(request.url)
       if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return await api(request, env)
+      const battle = /^\/battles\/([0-9a-f-]{36})$/.exec(url.pathname)
+      if (request.method === 'GET' && battle) return await battlePage(request, env, battle[1]!)
       const asset = await env.ASSETS.fetch(request)
       const secured = new Response(asset.body, asset)
       headers(false).forEach((value, key) => secured.headers.set(key, value))
