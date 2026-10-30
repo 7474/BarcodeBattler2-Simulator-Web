@@ -188,12 +188,12 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <details class="fold"><summary>バトルログ</summary><ol id="log"></ol></details>
     <details class="fold"><summary>設定<small id="settings-summary"></small></summary>
       <div class="setting" role="group" aria-label="演出"><span>演出</span>
-        <button type="button" data-setting="fx" data-value="standard">標準</button><button type="button" data-setting="fx" data-value="device">実機再現</button></div>
+        <button type="button" data-setting="fx" data-value="device">実機再現</button><button type="button" data-setting="fx" data-value="standard">簡易</button></div>
       <div class="setting" role="group" aria-label="バトル速度"><span>速度</span>
         <button type="button" data-setting="speed" data-value="0.5">ゆっくり</button><button type="button" data-setting="speed" data-value="1">ふつう</button><button type="button" data-setting="speed" data-value="2">はやい</button><button type="button" data-setting="speed" data-value="4">最速</button></div>
       <div class="setting" role="group" aria-label="音"><span>音</span>
         <button type="button" data-setting="sound" data-value="on">ON</button><button type="button" data-setting="sound" data-value="off">OFF</button></div>
-      <p class="setting-note">実機再現: 攻撃時のLED・液晶表示とビープ音を実機のタイミングで再現します。速度「ふつう」が実機と同じ速さです。</p>
+      <p class="setting-note">実機再現（既定）: 先攻決定・攻撃・回復・決着の液晶表示、LED、電子音を実機のタイミングで再現します。簡易: 結果だけを素早く表示します。速度「ふつう」が実機と同じ速さです。</p>
     </details>
     <details class="fold"><summary>ボタンの役割</summary>
       <dl class="guide-keys">
@@ -238,11 +238,12 @@ let cameraAbort: AbortController | undefined
 let cameraSession: CameraSession | undefined
 let torchOn = false
 const SETTINGS_KEY = 'bb2-settings'
-let fxMode: 'standard' | 'device' = 'standard'
+// The handheld's own LCD sequences and beeps are the default presentation.
+let fxMode: 'standard' | 'device' = 'device'
 let speed = 1
 try {
   const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') as { fx?: string; speed?: number; sound?: boolean }
-  if (saved.fx === 'device') fxMode = 'device'
+  if (saved.fx === 'standard') fxMode = 'standard'
   if (saved.speed && [0.5, 1, 2, 4].includes(saved.speed)) speed = saved.speed
   if (saved.sound === false) setSoundEnabled(false)
 } catch { /* Settings are a per-viewer convenience. */ }
@@ -523,7 +524,8 @@ async function animateAction(state: { frames: Frame[]; index: number }, index: n
     const dashes = action.side === 'left' ? ['-', ' -', '  -'] : ['  -', ' -', '-']
     await ticks(total, 40, token, tick => {
       const count = tick % 10
-      if (count === 1 && tick <= sweep) tones(!hit ? SOUNDS.miss : action.critical ? SOUNDS.critical : SOUNDS.hit)
+      // The original plays one recording per attack; it spans the LED sweep.
+      if (tick === 1) tones(!hit ? SOUNDS.miss : action.critical ? SOUNDS.critical : SOUNDS.hit)
       if (tick <= sweep) {
         const led = Math.floor(count / 2)
         lcdOverride = {
@@ -582,6 +584,8 @@ async function play(frames: Frame[]) {
     if (fxMode === 'device') {
       for (let index = 1; index < frames.length && !token.skipped; index++) {
         const action = parseAction(frames[index].lines)
+        // The CPU enemy waits 800 ms before acting (auto_battle_timer, 200 ms × 4).
+        if (action && campaign && action.side === 'right') await sleep(800, token)
         if (action) status(summarize(frames[index].lines.slice(0, 1)).replace(/ (MISS|\d+ダメージ)$/, ' …'))
         await animateAction(state, index, token)
         if (action && !token.skipped) status(summarize(frames[index].lines))
@@ -630,6 +634,40 @@ async function animateCardIn(blink: Side, item: Fighter | null) {
     if (playback === state) { playback = null; lcdOverride = null }
   }
 }
+/** Run a skippable LCD animation over the current cards. */
+async function animateLcd(run: (token: Token) => Promise<void>) {
+  skipPlayback()
+  const token: Token = { skipped: false, wake: () => {} }
+  const state = { frames: [{ left: slots.left, right: slots.right, lines: [] }], index: 0, token }
+  playback = state
+  render()
+  try { await run(token) } finally {
+    if (playback === state) { playback = null; lcdOverride = null }
+    render()
+  }
+}
+/** Power on (power_on_animation): "00" / "0000" patterns rotate over the rows, 150 ms × 9. */
+function animatePowerOn() {
+  return animateLcd(async token => {
+    if (fxMode === 'device') tones(SOUNDS.on)
+    else beep(990, 0.2)
+    const off = { battle: false, card: false, escape: false, critical: false, power: false, miss: false, damage: false }
+    await ticks(9, 150, token, tick => {
+      const step = tick % 3
+      const left = step === 0 ? { hp: pad(' 00'), st: '', df: pad('   00') } : step === 1 ? { hp: '', st: pad(' 0000'), df: '' } : { hp: pad('   00'), st: '', df: pad(' 00') }
+      const right = step === 0 ? { hp: pad('   00'), st: '', df: pad(' 00') } : step === 1 ? { hp: '', st: pad(' 0000'), df: '' } : { hp: pad(' 00'), st: '', df: pad('   00') }
+      lcdOverride = { left: { ...left }, right: { ...right }, leds: null, flags: off, item: false }
+    })
+  })
+}
+/** Deciding the first player (decide_first_player_animation): the end LEDs alternate, 200 ms × 15. */
+function animateFirstPlayer(first: Side) {
+  return animateLcd(async token => {
+    tones(SOUNDS.firstPlayer)
+    await ticks(15, 200, token, tick => { lcdOverride = { leds: tick % 2 ? 0 : 4, flags: { battle: true } } })
+    lcdOverride = { leds: ledOf(first), flags: { battle: true } }
+  })
+}
 /** Card rejected: CARD IN and MISS alternate (card_insert_error_animation). */
 async function animateCardError(isItem: boolean) {
   skipPlayback()
@@ -655,6 +693,22 @@ function lcdSides(): { left: Fighter | null; right: Fighter | null } {
   return { left: challenger(), right: room?.champion?.fighter ?? null }
 }
 
+/**
+ * Waiting for the player's command (battle_power_animation): BATTLE and POWER
+ * alternate every 500 ms; POWER stays dark when no herb is left.
+ */
+let waitBlink = false
+function waitingFlags(): Partial<Record<Indicator, boolean>> {
+  if (fxMode !== 'device' || online || playing() || !duel || !battling()) return {}
+  const snapshot = duel.snapshot()
+  const active = snapshot[snapshot.turn]
+  const canPower = active.pp > 0 && !snapshot.herbsBlocked[snapshot.turn]
+  return { battle: waitBlink, power: !waitBlink && canPower }
+}
+window.setInterval(() => {
+  waitBlink = !waitBlink
+  if (fxMode === 'device' && !online && !playing() && battling()) renderLcd()
+}, 500)
 function renderLcd() {
   const sides = lcdSides()
   const o = lcdOverride
@@ -687,6 +741,7 @@ function renderLcd() {
     power: lit.has('power'),
     miss: lit.has('miss'),
     damage: lit.has('damage'),
+    ...waitingFlags(),
     ...o?.flags,
   }
   document.querySelectorAll<HTMLElement>('[data-ind]').forEach(flag => {
@@ -1074,15 +1129,25 @@ function startBattle() {
     guardianStar = duel.snapshot().star
     campaignDuelResolved = false
     flashIndicators([])
-    sweepLeds('both')
-    sfx(SOUNDS.decide, 1320, 0.18)
-    if (campaign && duel.snapshot().turn === 'right' && !duel.snapshot().result) {
-      // The enemy moves first: show the opening state, then replay its attack.
-      const from = duel.snapshot().log.length
-      void replayDuel(from, [snapshotFrame(from)], () => duel!.auto())
+    const session = duel
+    const proceed = () => {
+      if (duel !== session) return
+      if (campaign && session.snapshot().turn === 'right' && !session.snapshot().result) {
+        // The enemy moves first: show the opening state, then replay its attack.
+        const from = session.snapshot().log.length
+        void replayDuel(from, [snapshotFrame(from)], () => session.auto())
+        return
+      }
+      showDuel([])
+    }
+    if (fxMode === 'device') {
+      status(`守護星${session.snapshot().star + 1} — 先攻を決めています…`)
+      void animateFirstPlayer(session.snapshot().turn).then(proceed)
       return
     }
-    showDuel([])
+    sweepLeds('both')
+    beep(1320, 0.18)
+    proceed()
   } catch (error) { status(errorMessage(error)) }
 }
 function indicatorsFor(lines: string[]): Indicator[] {
@@ -1233,11 +1298,7 @@ $('key-onoff').addEventListener('click', () => {
   unlockAudio()
   skipPlayback()
   resetAll()
-  const lcd = $('lcd')
-  lcd.classList.remove('boot')
-  void lcd.offsetWidth
-  lcd.classList.add('boot')
-  sfx(SOUNDS.on, 990, 0.2)
+  void animatePowerOn()
 })
 function setMode(next: Mode) {
   if (battling() || playing() || next === mode) return
