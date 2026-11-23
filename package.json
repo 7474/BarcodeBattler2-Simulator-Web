@@ -24,6 +24,6 @@
   "dependencies": {
     "@fontsource/libre-barcode-ean13-text": "^5.3.0",
     "barcode-detector": "^3.2.3",
-    "zxing-wasm": "^3.1.6"
+    "zxing-wasm": "^3.1.7"
   }
 }
